@@ -1,90 +1,101 @@
-"""
-Maze State module
------------------
-Define el estado observable del agente dentro del laberinto.
-Este módulo NO contiene lógica de entrenamiento ni del entorno;
-solo encapsula y valida la representación del estado.
-"""
-
-from dataclasses import dataclass
-from typing import Tuple
+from typing import Dict, Any
 import numpy as np
+import torch
 
 
-@dataclass(frozen=True)
 class MazeState:
     """
-    Representa el estado observable del agente en el laberinto.
+    Wrapper de estado que traduce hechos crudos del entorno (maze_env)
+    a una representación numérica apta para Deep Learning.
 
-    Componentes (alineados con el diseño conceptual):
-    - agent_pos: posición (x, y) del fantasma
-    - goal_pos: posición (x, y) del objetivo
-    - walls: información local de paredes (arriba, abajo, izquierda, derecha)
-    - dist_to_goal: distancia Manhattan al objetivo
+    El agente SOLO interactúa con esta clase.
     """
 
-    agent_pos: Tuple[int, int]
-    goal_pos: Tuple[int, int]
-    walls: Tuple[int, int, int, int]  # (up, down, left, right) -> 1 si hay pared
-    dist_to_goal: int
+    def __init__(self, maze_width: int, maze_height: int):
+        self.width = maze_width
+        self.height = maze_height
+
+        # Memoria interna
+        self.agent_pos = (0, 0)
+        self.goal_pos = None
+        self.walls = np.zeros((maze_height, maze_width), dtype=np.float32)
+        self.visited = np.zeros((maze_height, maze_width), dtype=np.float32)
+
+        self.done = False
+        self.last_raw_state: Dict[str, Any] | None = None
 
     # --------------------------------------------------
-    # Validación básica
+    # Entrada: hechos del entorno
     # --------------------------------------------------
-    def __post_init__(self):
-        if len(self.walls) != 4:
-            raise ValueError("walls debe tener exactamente 4 valores")
 
-    # --------------------------------------------------
-    # Representación numérica
-    # --------------------------------------------------
-    def to_vector(self, normalize: bool = False, maze_size: Tuple[int, int] | None = None) -> np.ndarray:
+    def update_from_facts(self, raw_state: Dict[str, Any]) -> None:
         """
-        Convierte el estado a un vector numérico para el DQN.
-
-        normalize:
-            Si True, normaliza posiciones y distancia según maze_size.
-        maze_size:
-            Tamaño del laberinto (width, height), requerido si normalize=True.
+        Consume el diccionario de hechos emitido por maze_env
+        y actualiza el estado interno del wrapper.
         """
-        ax, ay = self.agent_pos
-        gx, gy = self.goal_pos
+        self.last_raw_state = raw_state
 
-        vector = [
-            ax, ay,
-            gx, gy,
-            *self.walls,
-            self.dist_to_goal,
-        ]
+        # Posición del agente
+        x = raw_state["agent"]["x"]
+        y = raw_state["agent"]["y"]
+        self.agent_pos = (x, y)
 
-        if normalize:
-            if maze_size is None:
-                raise ValueError("maze_size es requerido para normalizar")
+        # Marcar visita
+        self.visited[x, y] = 1.0
 
-            w, h = maze_size
-            vector = [
-                ax / w,
-                ay / h,
-                gx / w,
-                gy / h,
-                *self.walls,
-                self.dist_to_goal / (w + h),
-            ]
+        # Terminal
+        self.done = raw_state["terminal"]["done"]
 
-        return np.array(vector, dtype=np.float32)
+        # Tipo de celda actual
+        cell_type = raw_state["cell"]["type"]
+
+        # Inferir goal si se detecta
+        if cell_type == "goal":
+            self.goal_pos = (x, y)
+
+        # Inicializar muros si aún no están marcados
+        # (Esto asume que el mapa completo se irá revelando)
+        if cell_type == "wall":
+            self.walls[x, y] = 1.0
+
+    # --------------------------------------------------
+    # Salida: representación para el agente
+    # --------------------------------------------------
+
+    def to_tensor(self) -> torch.Tensor:
+        """
+        Convierte el estado actual a un tensor normalizado
+        con forma (C, H, W).
+        """
+        agent_layer = np.zeros((self.height, self.width), dtype=np.float32)
+        agent_layer[self.agent_pos[0], self.agent_pos[1]] = 1.0
+
+        goal_layer = np.zeros((self.height, self.width), dtype=np.float32)
+        if self.goal_pos is not None:
+            goal_layer[self.goal_pos[0], self.goal_pos[1]] = 1.0
+
+        # Stack de canales
+        state_tensor = np.stack(
+            [
+                self.walls,     # Canal 0: muros
+                agent_layer,    # Canal 1: agente
+                goal_layer,     # Canal 2: objetivo
+                self.visited    # Canal 3: visitas
+            ],
+            axis=0
+        )
+
+        return torch.from_numpy(state_tensor)
 
     # --------------------------------------------------
     # Utilidades
     # --------------------------------------------------
-    def relative_goal_direction(self) -> Tuple[int, int]:
-        """
-        Dirección relativa del objetivo respecto al agente.
-        Devuelve valores en {-1, 0, 1} para (dx, dy).
-        """
-        ax, ay = self.agent_pos
-        gx, gy = self.goal_pos
 
-        dx = int(np.sign(gx - ax))
-        dy = int(np.sign(gy - ay))
-
-        return dx, dy
+    def reset(self) -> None:
+        """Reinicia completamente el estado."""
+        self.agent_pos = (0, 0)
+        self.goal_pos = None
+        self.walls.fill(0.0)
+        self.visited.fill(0.0)
+        self.done = False
+        self.last_raw_state = None
