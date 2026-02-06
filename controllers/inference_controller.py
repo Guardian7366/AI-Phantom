@@ -1,5 +1,12 @@
+import os
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+
+DEFAULT_BEST_MODEL_PATH = os.path.join(
+    "results", "best_model", "best_model.pth"
+)
+
 
 class InferenceController:
     """
@@ -11,7 +18,7 @@ class InferenceController:
         self,
         env,
         agent,
-        model_path: str,
+        model_path: Optional[str] = None,
         num_episodes: int = 10,
         max_steps_per_episode: int = 500,
         render: bool = False,
@@ -19,7 +26,10 @@ class InferenceController:
     ):
         self.env = env
         self.agent = agent
-        self.model_path = model_path
+
+        # Resolución automática del modelo
+        self.model_path = model_path or DEFAULT_BEST_MODEL_PATH
+        self._validate_model_path()
 
         self.num_episodes = num_episodes
         self.max_steps = max_steps_per_episode
@@ -31,6 +41,20 @@ class InferenceController:
         self.episode_rewards: List[float] = []
         self.episode_lengths: List[int] = []
         self.successes: List[int] = []
+
+    # ----------------------------
+    # Validaciones
+    # ----------------------------
+
+    def _validate_model_path(self):
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(
+                f"Modelo de inferencia no encontrado: {self.model_path}"
+            )
+
+    # ----------------------------
+    # Ejecución
+    # ----------------------------
 
     def run(self) -> Dict[str, Any]:
         """
@@ -47,7 +71,10 @@ class InferenceController:
             success = False
 
             for step in range(self.max_steps):
-                action = self.agent.select_action(state, epsilon=0.0)
+                action = self.agent.select_action(
+                    state,
+                    epsilon=0.0  # inferencia 100% pura
+                )
 
                 next_state, reward, done, info = self.env.step(action)
 
@@ -70,8 +97,13 @@ class InferenceController:
 
         return self._build_inference_summary()
 
+    # ----------------------------
+    # Métricas
+    # ----------------------------
+
     def _build_inference_summary(self) -> Dict[str, Any]:
         return {
+            "model_path": self.model_path,
             "episodes": self.num_episodes,
             "mean_reward": float(np.mean(self.episode_rewards)),
             "mean_length": float(np.mean(self.episode_lengths)),

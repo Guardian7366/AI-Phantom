@@ -1,0 +1,10 @@
+[
+  {
+    "experiment_id": "maze_seed42",
+    "score": 0.91,
+    "eval_success": 0.95,
+    "mean_reward": 12.4,
+    "mean_length": 18.2,
+    "penalties": []
+  }
+]
