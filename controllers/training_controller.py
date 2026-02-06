@@ -1,7 +1,12 @@
 import os
+import json
 import numpy as np
 from collections import deque
 from typing import Dict, Any
+from datetime import datetime
+
+from controllers.evaluation_controller import EvaluationController
+
 
 class TrainingController:
     """
@@ -19,9 +24,11 @@ class TrainingController:
         epsilon_end: float = 0.05,
         epsilon_decay_episodes: int = 500,
         checkpoint_dir: str = "checkpoints",
+        results_dir: str = "results",
         early_stopping_patience: int = 50,
         success_threshold: float = 0.95,
         success_window: int = 100,
+        experiment_id: str | None = None,
     ):
         self.env = env
         self.agent = agent
@@ -34,11 +41,20 @@ class TrainingController:
         self.epsilon_decay_episodes = epsilon_decay_episodes
 
         self.checkpoint_dir = checkpoint_dir
+        self.results_dir = results_dir
+
         os.makedirs(self.checkpoint_dir, exist_ok=True)
+        os.makedirs(self.results_dir, exist_ok=True)
 
         self.early_stopping_patience = early_stopping_patience
         self.success_threshold = success_threshold
         self.success_window = success_window
+
+        self.experiment_id = (
+            experiment_id
+            if experiment_id is not None
+            else datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        )
 
         # Métricas
         self.episode_rewards = []
@@ -60,13 +76,12 @@ class TrainingController:
 
     def train(self) -> Dict[str, Any]:
         """
-        Ejecuta el entrenamiento completo.
+        Ejecuta el entrenamiento completo y cierra el ciclo experimental.
         """
         self.agent.set_mode(training=True)
 
         for episode in range(1, self.num_episodes + 1):
             state = self.env.reset()
-
             epsilon = self._compute_epsilon(episode)
 
             episode_reward = 0.0
@@ -97,13 +112,37 @@ class TrainingController:
             self.success_history.append(1 if success else 0)
 
             if episode_loss:
-                self.loss_history.append(np.mean(episode_loss))
+                self.loss_history.append(float(np.mean(episode_loss)))
 
-            # Evaluar progreso
+            # Early stopping / progreso
             if self._check_and_handle_progress(episode):
                 break
 
-        return self._build_training_summary()
+        # Guardar último checkpoint
+        last_checkpoint_path = os.path.join(
+            self.checkpoint_dir, "last_model.pth"
+        )
+        self.agent.save(last_checkpoint_path)
+
+        # Evaluación automática del mejor modelo
+        evaluation_results = self._run_evaluation()
+
+        # Construir resumen final
+        training_summary = self._build_training_summary()
+        experiment_results = {
+            "experiment_id": self.experiment_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "training": training_summary,
+            "evaluation": evaluation_results,
+        }
+
+        results_path = os.path.join(
+            self.results_dir, f"{self.experiment_id}.json"
+        )
+        with open(results_path, "w") as f:
+            json.dump(experiment_results, f, indent=2)
+
+        return experiment_results
 
     def _check_and_handle_progress(self, episode: int) -> bool:
         """
@@ -113,7 +152,7 @@ class TrainingController:
         if len(self.success_history) < self.success_window:
             return False
 
-        success_rate = np.mean(self.success_history)
+        success_rate = float(np.mean(self.success_history))
 
         # Guardar mejor modelo
         if success_rate > self.best_success_rate:
@@ -130,8 +169,8 @@ class TrainingController:
         # Early stopping por convergencia real
         if success_rate >= self.success_threshold:
             print(
-                f"[Early Stop] Success rate alcanzado: {success_rate:.2f} "
-                f"en episodio {episode}"
+                f"[Early Stop] Success rate alcanzado: "
+                f"{success_rate:.2f} en episodio {episode}"
             )
             return True
 
@@ -144,6 +183,22 @@ class TrainingController:
             return True
 
         return False
+
+    def _run_evaluation(self) -> Dict[str, Any]:
+        """
+        Ejecuta evaluación pura del mejor modelo entrenado.
+        """
+        best_checkpoint = os.path.join(
+            self.checkpoint_dir, "best_model.pth"
+        )
+
+        evaluator = EvaluationController(
+            env_factory=self.env.factory,
+            agent_factory=self.agent.factory,
+            config=self.env.config,
+        )
+
+        return evaluator.evaluate_checkpoint(best_checkpoint)
 
     def _build_training_summary(self) -> Dict[str, Any]:
         return {
