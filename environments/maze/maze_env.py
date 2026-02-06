@@ -1,171 +1,123 @@
+from typing import Dict, Tuple, Any
 import numpy as np
-from typing import Tuple, Dict
 
+class MazeEnv:
+    def __init__(self, grid: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int]):
+        self.grid = grid
+        self.start = start
+        self.goal = goal
 
-class MazeEnvironment:
-    """
-    Laberinto 2D discreto con movimiento en 4 direcciones.
-    Entorno totalmente desacoplado de cualquier agente o algoritmo.
-    """
-
-    ACTIONS = {
-        0: (0, -1),   # up
-        1: (0, 1),    # down
-        2: (-1, 0),   # left
-        3: (1, 0),    # right
-    }
-
-    def __init__(
-        self,
-        maze: np.ndarray,
-        max_steps: int = 200,
-    ):
-        """
-        maze: matriz 2D (0 libre, 1 pared)
-        max_steps: límite duro por episodio
-        """
-        self.maze = maze
-        self.height, self.width = maze.shape
-        self.max_steps = max_steps
+        self.height, self.width = grid.shape
+        self.visited = np.zeros_like(grid, dtype=int)
 
         self.agent_pos = None
-        self.goal_pos = None
-        self.steps = 0
-        self.last_action = None
-        self.visited_counter = {}
+        self.done = False
 
-    # ------------------------------------------------------------------
-    # PUBLIC API
-    # ------------------------------------------------------------------
+    def reset(self) -> Dict[str, Any]:
+        self.agent_pos = list(self.start)
+        self.visited.fill(0)
+        self.done = False
 
-    def reset(self) -> np.ndarray:
-        self.agent_pos = self._random_free_position()
-        self.goal_pos = self._random_free_position(exclude=self.agent_pos)
-
-        self.steps = 0
-        self.last_action = None
-        self.visited_counter = {self.agent_pos: 1}
-
-        return self._get_state()
-
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict]:
-        self.steps += 1
-
-        collided = False
-        new_pos = self._attempt_move(action)
-
-        if new_pos == self.agent_pos:
-            collided = True
-        else:
-            self.agent_pos = new_pos
-
-        self.last_action = action
-        self.visited_counter[self.agent_pos] = self.visited_counter.get(self.agent_pos, 0) + 1
-
-        reward = self._compute_reward(collided)
-        done, terminal_type = self._check_terminal()
-
-        info = {
-            "collided": collided,
-            "distance_to_goal": self._manhattan_distance(),
-            "terminal_type": terminal_type,
-        }
-
-        return self._get_state(), reward, done, info
-
-    def get_action_space(self) -> int:
-        return len(self.ACTIONS)
-
-    def get_state_space(self) -> int:
-        return len(self._get_state())
-
-    # ------------------------------------------------------------------
-    # INTERNAL LOGIC
-    # ------------------------------------------------------------------
-
-    def _attempt_move(self, action: int) -> Tuple[int, int]:
-        dx, dy = self.ACTIONS[action]
-        x, y = self.agent_pos
-        nx, ny = x + dx, y + dy
-
-        if self._is_wall(nx, ny):
-            return self.agent_pos
-
-        return (nx, ny)
-
-    def _is_wall(self, x: int, y: int) -> bool:
-        if x < 0 or y < 0 or x >= self.width or y >= self.height:
-            return True
-        return self.maze[y, x] == 1
-
-    def _manhattan_distance(self) -> int:
-        ax, ay = self.agent_pos
-        gx, gy = self.goal_pos
-        return abs(ax - gx) + abs(ay - gy)
-
-    def _compute_reward(self, collided: bool) -> float:
-        reward = -0.01  # paso de tiempo
-
-        if collided:
-            reward -= 0.1
-
-        distance = self._manhattan_distance()
-        reward += -0.01 * distance
-
-        if self.agent_pos == self.goal_pos:
-            reward += 1.0
-
-        if self.visited_counter[self.agent_pos] > 3:
-            reward -= 0.05
-
-        return reward
-
-    def _check_terminal(self) -> Tuple[bool, str]:
-        if self.agent_pos == self.goal_pos:
-            return True, "success"
-
-        if self.steps >= self.max_steps:
-            return True, "timeout"
-
-        if self.visited_counter[self.agent_pos] > 10:
-            return True, "stuck"
-
-        return False, "none"
-
-    def _get_state(self) -> np.ndarray:
-        ax, ay = self.agent_pos
-        gx, gy = self.goal_pos
-
-        dx = (gx - ax) / self.width
-        dy = (gy - ay) / self.height
-
-        distance = self._manhattan_distance() / (self.width + self.height)
-
-        walls = [
-            int(self._is_wall(ax, ay - 1)),  # up
-            int(self._is_wall(ax, ay + 1)),  # down
-            int(self._is_wall(ax - 1, ay)),  # left
-            int(self._is_wall(ax + 1, ay)),  # right
-        ]
-
-        last_move = [0, 0, 0, 0]
-        if self.last_action is not None:
-            last_move[self.last_action] = 1
-
-        stuck_flag = int(self.visited_counter.get(self.agent_pos, 0) > 1)
-
-        state = np.array(
-            [dx, dy, distance] + walls + last_move + [stuck_flag],
-            dtype=np.float32
+        return self._emit_raw_state(
+            collided=False,
+            moved=False,
+            terminal_type=None
         )
 
-        return state
+    def step(self, action: int) -> Dict[str, Any]:
+        if self.done:
+            raise RuntimeError("Episode has ended. Call reset().")
 
-    def _random_free_position(self, exclude=None) -> Tuple[int, int]:
-        while True:
-            x = np.random.randint(0, self.width)
-            y = np.random.randint(0, self.height)
-            if self.maze[y, x] == 0:
-                pos = (x, y)
-                if exclude is None or pos != exclude:
-                    return pos
+        dx, dy = self._action_to_delta(action)
+        next_x = self.agent_pos[0] + dx
+        next_y = self.agent_pos[1] + dy
+
+        collided = False
+        moved = False
+        terminal_type = None
+
+        if self._is_wall(next_x, next_y):
+            collided = True
+        else:
+            self.agent_pos = [next_x, next_y]
+            moved = True
+
+        self.visited[self.agent_pos[0], self.agent_pos[1]] += 1
+
+        if tuple(self.agent_pos) == self.goal:
+            self.done = True
+            terminal_type = "success"
+
+        return self._emit_raw_state(
+            collided=collided,
+            moved=moved,
+            terminal_type=terminal_type
+        )
+
+    # ------------------------
+    # Raw facts only
+    # ------------------------
+
+    def _emit_raw_state(
+        self,
+        collided: bool,
+        moved: bool,
+        terminal_type: str | None
+    ) -> Dict[str, Any]:
+
+        x, y = self.agent_pos
+        cell_value = self.grid[x, y]
+
+        return {
+            "agent": {
+                "x": x,
+                "y": y,
+                "orientation": None
+            },
+            "cell": {
+                "type": self._cell_type(cell_value),
+                "properties": {}
+            },
+            "maze": {
+                "width": self.width,
+                "height": self.height
+            },
+            "events": {
+                "collided": collided,
+                "moved": moved
+            },
+            "terminal": {
+                "done": self.done,
+                "terminal_type": terminal_type
+            },
+            "memory": {
+                "visited_count": int(self.visited[x, y])
+            }
+        }
+
+    # ------------------------
+    # Helpers (still env logic)
+    # ------------------------
+
+    def _is_wall(self, x: int, y: int) -> bool:
+        if x < 0 or y < 0 or x >= self.height or y >= self.width:
+            return True
+        return self.grid[x, y] == 1
+
+    def _cell_type(self, value: int) -> str:
+        if value == 0:
+            return "empty"
+        if value == 1:
+            return "wall"
+        if value == 2:
+            return "goal"
+        return "unknown"
+
+    def _action_to_delta(self, action: int) -> Tuple[int, int]:
+        # 0: up, 1: right, 2: down, 3: left
+        return {
+            0: (-1, 0),
+            1: (0, 1),
+            2: (1, 0),
+            3: (0, -1)
+        }.get(action, (0, 0))
