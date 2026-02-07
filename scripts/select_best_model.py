@@ -7,6 +7,9 @@ DEFAULT_RANKING_FILE = "results/penalized_ranking.json"
 DEFAULT_OUTPUT_DIR = "results/best_model"
 DEFAULT_OUTPUT_NAME = "best_model.pth"
 
+# Ruta REAL donde train guarda checkpoints
+DEFAULT_CHECKPOINT_DIR = "results/checkpoints"
+
 
 # ----------------------------
 # Utilidades
@@ -27,15 +30,14 @@ def load_ranking(ranking_file: str):
     return ranking
 
 
-def resolve_checkpoint_path(experiment_id: str) -> str:
+def resolve_checkpoint_path() -> str:
     """
-    Convención ya usada en el proyecto:
-    checkpoints/<experiment_id>/best.pth
+    Convención REAL del proyecto:
+    results/checkpoints/best_model.pth
     """
     ckpt_path = os.path.join(
-        "checkpoints",
-        experiment_id,
-        "best.pth"
+        DEFAULT_CHECKPOINT_DIR,
+        "best_model.pth"
     )
 
     if not os.path.exists(ckpt_path):
@@ -64,7 +66,7 @@ def select_best_experiment(ranking):
 def promote_model(best_exp, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
 
-    ckpt_src = resolve_checkpoint_path(best_exp["experiment_id"])
+    ckpt_src = resolve_checkpoint_path()
     ckpt_dst = os.path.join(output_dir, DEFAULT_OUTPUT_NAME)
 
     shutil.copyfile(ckpt_src, ckpt_dst)

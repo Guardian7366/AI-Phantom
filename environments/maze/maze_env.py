@@ -1,10 +1,13 @@
-from typing import Tuple, Dict, Any, Callable
+from typing import Callable
 import numpy as np
 
 
 class MazeEnvironment:
     """
     Entorno de laberinto compatible con DQN.
+    Acepta:
+    - config completo (con clave 'environment')
+    - o config directo del entorno
     """
 
     ACTIONS = {
@@ -15,24 +18,43 @@ class MazeEnvironment:
     }
 
     def __init__(self, config: dict):
-        # Guardar config (IMPORTANTE para evaluación)
+        # Guardar config completo (para factory / evaluación)
         self.config = config
 
-        self.grid = np.array(config["grid"])
-        self.start = tuple(config["start"])
-        self.goal = tuple(config["goal"])
+        # 🔑 Extraer subconfig del entorno de forma segura
+        if "environment" in config:
+            env_cfg = config["environment"]
+        else:
+            env_cfg = config
+
+        # ---------------------
+        # Validaciones claras
+        # ---------------------
+        required_keys = ["grid", "start", "goal"]
+        for key in required_keys:
+            if key not in env_cfg:
+                raise KeyError(
+                    f"MazeEnvironment: falta clave '{key}' en config['environment']"
+                )
+
+        # ---------------------
+        # Cargar entorno
+        # ---------------------
+        self.grid = np.array(env_cfg["grid"])
+        self.start = tuple(env_cfg["start"])
+        self.goal = tuple(env_cfg["goal"])
 
         self.height, self.width = self.grid.shape
 
         self.action_space_n = 4
-        self.state_dim = 6  # definido previamente en diseño
+        self.state_dim = 6
 
-        self.max_steps = config.get("max_steps", 500)
+        self.max_steps = env_cfg.get("max_steps", 500)
 
         self.agent_pos = None
         self.steps = 0
 
-        # Factory para recrear el entorno (clave para evaluación)
+        # Factory (clave para evaluación y smoke tests)
         self.factory: Callable[[], "MazeEnvironment"] = (
             lambda: MazeEnvironment(self.config)
         )
@@ -86,8 +108,8 @@ class MazeEnvironment:
                 ay / self.width,
                 (gx - ax) / self.height,
                 (gy - ay) / self.width,
-                self._is_wall(ax - 1, ay),
-                self._is_wall(ax + 1, ay),
+                float(self._is_wall(ax - 1, ay)),
+                float(self._is_wall(ax + 1, ay)),
             ],
             dtype=np.float32,
         )
@@ -96,4 +118,3 @@ class MazeEnvironment:
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
             return True
         return self.grid[x, y] == 1
-

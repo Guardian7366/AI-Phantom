@@ -49,41 +49,62 @@ def main():
     # ----------------------------
 
     try:
-        env = MazeEnvironment(**cfg["environment"])
+        # 🔑 IMPORTANTE: el entorno recibe el CONFIG COMPLETO
+        env = MazeEnvironment(config=cfg)
         success("Environment initialized")
     except Exception as e:
         fail(f"Environment failed to initialize: {e}")
+
+    from agents.dqn.replay_buffer import ReplayBuffer
 
     # ----------------------------
     # Agent
     # ----------------------------
 
     try:
+        raw_agent_cfg = cfg.get("agent", {})
+
+        # 🔑 Eliminar claves que NO pertenecen al constructor del agente
+        agent_cfg = {
+            k: v
+            for k, v in raw_agent_cfg.items()
+            if k not in {"type", "epsilon"}
+        }
+
+        # 🔑 Replay buffer dummy (inferencia)
+        replay_buffer = ReplayBuffer(capacity=1)
+
         agent = DQNAgent(
             state_dim=env.state_dim,
-            action_dim=env.action_dim,
-            **cfg["agent"]
+            action_dim=env.action_space_n,
+            replay_buffer=replay_buffer,
+            **agent_cfg
         )
+
+        # Inferencia pura
+        agent.set_mode(training=False)
+
         success("Agent initialized")
     except Exception as e:
         fail(f"Agent failed to initialize: {e}")
+
 
     # ----------------------------
     # Inference controller
     # ----------------------------
 
-    inference_cfg = cfg.get("inference", {})
-    model_path = inference_cfg.get("model_path")
+    model_cfg = cfg.get("model", {})
+    model_path = model_cfg.get("path")
 
     if model_path is None:
-        fail("model_path not defined in inference config")
+        fail("model.path not defined in config")
 
     controller = InferenceController(
         env=env,
         agent=agent,
         model_path=model_path,
         num_episodes=5,
-        max_steps_per_episode=inference_cfg.get("max_steps_per_episode", 500),
+        max_steps_per_episode=cfg.get("environment", {}).get("max_steps", 500),
         render=False,
     )
 
