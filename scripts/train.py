@@ -1,6 +1,5 @@
 import argparse
 import yaml
-import os
 
 from controllers.training_controller import TrainingController
 from utils.seeding import set_global_seed
@@ -10,29 +9,47 @@ from agents.dqn.dqn_agent import DQNAgent
 from agents.dqn.replay_buffer import ReplayBuffer
 
 
+# -------------------------------------------------
+# Config
+# -------------------------------------------------
+
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
+# -------------------------------------------------
+# Builders
+# -------------------------------------------------
 def build_environment(config: dict):
-    return MazeEnvironment(config=config)
+    env_config = config["environment"]
+    return MazeEnvironment(config=env_config)
 
 
 def build_agent(config: dict, env):
+    agent_cfg = config["agent"]
+
     replay_buffer = ReplayBuffer(
-        capacity=config["agent"]["replay_buffer_size"]
+        capacity=agent_cfg["replay_buffer_size"]
     )
 
     agent = DQNAgent(
         state_dim=env.state_dim,
         action_dim=env.action_space_n,
         replay_buffer=replay_buffer,
-        **config["agent"]
+        gamma=agent_cfg.get("gamma", 0.99),
+        lr=agent_cfg.get("learning_rate", 1e-3),
+        batch_size=agent_cfg.get("batch_size", 64),
+        target_update_freq=agent_cfg.get("target_update_frequency", 1000),
     )
 
     return agent
 
+
+
+# -------------------------------------------------
+# Experiment
+# -------------------------------------------------
 
 def run_experiment(config: dict, seed: int, experiment_id: str):
     set_global_seed(seed)
@@ -58,6 +75,10 @@ def run_experiment(config: dict, seed: int, experiment_id: str):
 
     return controller.train()
 
+
+# -------------------------------------------------
+# Main
+# -------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="AI Phantom Training Runner")

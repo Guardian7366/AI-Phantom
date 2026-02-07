@@ -1,123 +1,99 @@
-from typing import Dict, Tuple, Any
+from typing import Tuple, Dict, Any, Callable
 import numpy as np
 
-class MazeEnv:
-    def __init__(self, grid: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int]):
-        self.grid = grid
-        self.start = start
-        self.goal = goal
 
-        self.height, self.width = grid.shape
-        self.visited = np.zeros_like(grid, dtype=int)
+class MazeEnvironment:
+    """
+    Entorno de laberinto compatible con DQN.
+    """
+
+    ACTIONS = {
+        0: (-1, 0),  # up
+        1: (0, 1),   # right
+        2: (1, 0),   # down
+        3: (0, -1),  # left
+    }
+
+    def __init__(self, config: dict):
+        # Guardar config (IMPORTANTE para evaluación)
+        self.config = config
+
+        self.grid = np.array(config["grid"])
+        self.start = tuple(config["start"])
+        self.goal = tuple(config["goal"])
+
+        self.height, self.width = self.grid.shape
+
+        self.action_space_n = 4
+        self.state_dim = 6  # definido previamente en diseño
+
+        self.max_steps = config.get("max_steps", 500)
 
         self.agent_pos = None
-        self.done = False
+        self.steps = 0
 
-    def reset(self) -> Dict[str, Any]:
-        self.agent_pos = list(self.start)
-        self.visited.fill(0)
-        self.done = False
-
-        return self._emit_raw_state(
-            collided=False,
-            moved=False,
-            terminal_type=None
+        # Factory para recrear el entorno (clave para evaluación)
+        self.factory: Callable[[], "MazeEnvironment"] = (
+            lambda: MazeEnvironment(self.config)
         )
 
-    def step(self, action: int) -> Dict[str, Any]:
-        if self.done:
-            raise RuntimeError("Episode has ended. Call reset().")
+    # ---------------------
+    # Core API
+    # ---------------------
 
-        dx, dy = self._action_to_delta(action)
-        next_x = self.agent_pos[0] + dx
-        next_y = self.agent_pos[1] + dy
+    def reset(self) -> np.ndarray:
+        self.agent_pos = list(self.start)
+        self.steps = 0
+        return self._get_state()
 
-        collided = False
-        moved = False
-        terminal_type = None
+    def step(self, action: int):
+        self.steps += 1
 
-        if self._is_wall(next_x, next_y):
-            collided = True
+        dx, dy = self.ACTIONS[action]
+        nx = self.agent_pos[0] + dx
+        ny = self.agent_pos[1] + dy
+
+        reward = -0.01
+        done = False
+        info = {"success": False}
+
+        if self._is_wall(nx, ny):
+            reward = -0.1
         else:
-            self.agent_pos = [next_x, next_y]
-            moved = True
-
-        self.visited[self.agent_pos[0], self.agent_pos[1]] += 1
+            self.agent_pos = [nx, ny]
 
         if tuple(self.agent_pos) == self.goal:
-            self.done = True
-            terminal_type = "success"
+            reward = 1.0
+            done = True
+            info["success"] = True
 
-        return self._emit_raw_state(
-            collided=collided,
-            moved=moved,
-            terminal_type=terminal_type
+        if self.steps >= self.max_steps:
+            done = True
+
+        return self._get_state(), reward, done, info
+
+    # ---------------------
+    # Helpers
+    # ---------------------
+
+    def _get_state(self) -> np.ndarray:
+        ax, ay = self.agent_pos
+        gx, gy = self.goal
+
+        return np.array(
+            [
+                ax / self.height,
+                ay / self.width,
+                (gx - ax) / self.height,
+                (gy - ay) / self.width,
+                self._is_wall(ax - 1, ay),
+                self._is_wall(ax + 1, ay),
+            ],
+            dtype=np.float32,
         )
-
-    # ------------------------
-    # Raw facts only
-    # ------------------------
-
-    def _emit_raw_state(
-        self,
-        collided: bool,
-        moved: bool,
-        terminal_type: str | None
-    ) -> Dict[str, Any]:
-
-        x, y = self.agent_pos
-        cell_value = self.grid[x, y]
-
-        return {
-            "agent": {
-                "x": x,
-                "y": y,
-                "orientation": None
-            },
-            "cell": {
-                "type": self._cell_type(cell_value),
-                "properties": {}
-            },
-            "maze": {
-                "width": self.width,
-                "height": self.height
-            },
-            "events": {
-                "collided": collided,
-                "moved": moved
-            },
-            "terminal": {
-                "done": self.done,
-                "terminal_type": terminal_type
-            },
-            "memory": {
-                "visited_count": int(self.visited[x, y])
-            }
-        }
-
-    # ------------------------
-    # Helpers (still env logic)
-    # ------------------------
 
     def _is_wall(self, x: int, y: int) -> bool:
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
             return True
         return self.grid[x, y] == 1
 
-    def _cell_type(self, value: int) -> str:
-        if value == 0:
-            return "empty"
-        if value == 1:
-            return "wall"
-        if value == 2:
-            return "goal"
-        return "unknown"
-
-    def _action_to_delta(self, action: int) -> Tuple[int, int]:
-        # 0: up, 1: right, 2: down, 3: left
-        return {
-            0: (-1, 0),
-            1: (0, 1),
-            2: (1, 0),
-            3: (0, -1)
-        }.get(action, (0, 0))

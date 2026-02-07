@@ -1,11 +1,12 @@
 import random
-from typing import Optional
+from typing import Optional, Callable
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from agents.dqn.replay_buffer import ReplayBuffer
+
 
 class DQN(nn.Module):
     def __init__(self, state_dim: int, action_dim: int):
@@ -21,6 +22,7 @@ class DQN(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
 
 class DQNAgent:
     """
@@ -38,6 +40,17 @@ class DQNAgent:
         target_update_freq: int = 1000,
         device: Optional[str] = None,
     ):
+        # Guardar parámetros para factory
+        self._init_params = dict(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            gamma=gamma,
+            lr=lr,
+            batch_size=batch_size,
+            target_update_freq=target_update_freq,
+            device=device,
+        )
+
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.replay_buffer = replay_buffer
@@ -60,6 +73,32 @@ class DQNAgent:
         self.training = True
         self.update_step = 0
 
+        # Factory para evaluación (CRÍTICO)
+        self.factory: Callable[[], "DQNAgent"] = self._build_factory
+
+    # ---------------------
+    # Factory
+    # ---------------------
+
+    def _build_factory(self) -> "DQNAgent":
+        """
+        Crea una nueva instancia del agente (sin replay buffer compartido).
+        Usado exclusivamente para evaluación.
+        """
+        replay_buffer = ReplayBuffer(capacity=1)  # dummy buffer
+
+        agent = DQNAgent(
+            replay_buffer=replay_buffer,
+            **self._init_params,
+        )
+
+        agent.set_mode(training=False)
+        return agent
+
+    # ---------------------
+    # API
+    # ---------------------
+
     def set_mode(self, training: bool) -> None:
         """
         Define si el agente está en modo entrenamiento o inferencia.
@@ -76,7 +115,11 @@ class DQNAgent:
         if self.training and random.random() < epsilon:
             return random.randrange(self.action_dim)
 
-        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
+        state_tensor = (
+            torch.tensor(state, dtype=torch.float32)
+            .unsqueeze(0)
+            .to(self.device)
+        )
 
         with torch.no_grad():
             q_values = self.policy_net(state_tensor)
@@ -120,10 +163,8 @@ class DQNAgent:
         next_states = torch.tensor(next_states).to(self.device)
         dones = torch.tensor(dones).unsqueeze(1).to(self.device)
 
-        # Q(s, a)
         q_values = self.policy_net(states).gather(1, actions)
 
-        # max_a' Q_target(s', a')
         with torch.no_grad():
             max_next_q = self.target_net(next_states).max(1, keepdim=True)[0]
             target_q = rewards + (1 - dones) * self.gamma * max_next_q
@@ -134,7 +175,6 @@ class DQNAgent:
         loss.backward()
         self.optimizer.step()
 
-        # Target network update
         self.update_step += 1
         if self.update_step % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -145,5 +185,8 @@ class DQNAgent:
         torch.save(self.policy_net.state_dict(), path)
 
     def load(self, path: str) -> None:
-        self.policy_net.load_state_dict(torch.load(path, map_location=self.device))
+        self.policy_net.load_state_dict(
+            torch.load(path, map_location=self.device)
+        )
         self.target_net.load_state_dict(self.policy_net.state_dict())
+
