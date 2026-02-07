@@ -4,26 +4,43 @@ import argparse
 import numpy as np
 from typing import List, Dict
 
-DEFAULT_RESULTS_DIR = "results"
+DEFAULT_RESULTS_DIR = "results/runs"
 OUTPUT_FILE = "results/penalized_ranking.json"
 
 
 # ----------------------------
-# Carga de resultados
+# Carga de resultados (recursiva)
 # ----------------------------
 
 def load_results(results_dir: str) -> List[Dict]:
     experiments = []
 
-    for fname in os.listdir(results_dir):
-        if not fname.endswith(".json"):
-            continue
+    for root, _, files in os.walk(results_dir):
+        for fname in files:
+            if not fname.endswith(".json"):
+                continue
 
-        with open(os.path.join(results_dir, fname), "r") as f:
-            experiments.append(json.load(f))
+            full_path = os.path.join(root, fname)
+
+            try:
+                with open(full_path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+
+            # SOLO aceptar JSONs de experimentos
+            if not isinstance(data, dict):
+                continue
+
+            if "experiment_id" not in data:
+                continue
+
+            experiments.append(data)
 
     if not experiments:
-        raise RuntimeError("No se encontraron resultados")
+        raise RuntimeError(
+            f"No se encontraron resultados válidos en {results_dir}"
+        )
 
     return experiments
 
@@ -44,13 +61,13 @@ def compute_penalty(exp: Dict) -> Dict:
     penalties = []
     score = eval_success  # base score
 
-    # 1. Overfitting (entrena bien, evalúa mal)
+    # 1. Overfitting
     if train_success > 0.9 and eval_success < 0.7:
         penalties.append("OVERFIT")
         score -= 0.3
 
-    # 2. Política ineficiente (episodios muy largos)
-    if eval_success > 0.7 and mean_length > 0.8 * mean_length:
+    # 2. Política ineficiente
+    if eval_success > 0.7 and mean_length > 1.5 * np.mean([mean_length]):
         penalties.append("INEFFICIENT")
         score -= 0.2
 
@@ -89,7 +106,7 @@ def main():
         "--results_dir",
         type=str,
         default=DEFAULT_RESULTS_DIR,
-        help="Directorio con results/*.json",
+        help="Directorio con runs de experimentos",
     )
     args = parser.parse_args()
 
@@ -107,6 +124,8 @@ def main():
             f"Len: {r['mean_length']:.1f} | "
             f"{penalty_tag}"
         )
+
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
 
     with open(OUTPUT_FILE, "w") as f:
         json.dump(ranking, f, indent=2)
