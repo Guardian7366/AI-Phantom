@@ -46,8 +46,13 @@ class MazeEnvironment:
 
         self.height, self.width = self.grid.shape
 
-        self.action_space_n = 4
+        # Dimensiones (núcleo)
         self.state_dim = 6
+        self.action_space_n = 4
+
+        # 👉 Compatibilidad tipo Gym (CLAVE)
+        self.observation_space = self.state_dim
+        self.action_space = self.action_space_n
 
         self.max_steps = env_cfg.get("max_steps", 500)
 
@@ -118,3 +123,4 @@ class MazeEnvironment:
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
             return True
         return self.grid[x, y] == 1
+

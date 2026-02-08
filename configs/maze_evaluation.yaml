@@ -1,0 +1,29 @@
+# =========================================
+# Evaluación cuantitativa del best_model
+# =========================================
+
+environment:
+  grid:
+    - [0, 0, 0, 0, 0]
+    - [0, 1, 1, 1, 0]
+    - [0, 0, 0, 1, 0]
+    - [1, 1, 0, 0, 0]
+    - [0, 0, 0, 1, 0]
+
+  start: [0, 0]
+  goal: [4, 4]
+  max_steps: 100
+
+agent:
+  gamma: 0.99
+  learning_rate: 0.0005
+  batch_size: 64
+  target_update_frequency: 500
+
+evaluation:
+  num_episodes: 100
+  max_steps_per_episode: 100
+  seed: 123
+
+model:
+  path: results/best_model/best_model.pth
