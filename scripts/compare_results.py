@@ -8,21 +8,43 @@ from typing import List, Dict
 DEFAULT_RESULTS_DIR = "results"
 
 
+def is_experiment_file(data) -> bool:
+    """
+    Verifica si el JSON corresponde a un experimento entrenado
+    y no a trayectorias, plots u otros artefactos.
+    """
+    if not isinstance(data, dict):
+        return False
+
+    # Debe tener al menos alguna de estas secciones
+    return "training" in data or "evaluation" in data
+
+
 def load_results(results_dir: str) -> List[Dict]:
     experiments = []
 
-    for fname in os.listdir(results_dir):
-        if not fname.endswith(".json"):
-            continue
+    for root, _, files in os.walk(results_dir):
+        for fname in files:
+            if not fname.endswith(".json"):
+                continue
 
-        path = os.path.join(results_dir, fname)
-        with open(path, "r") as f:
-            data = json.load(f)
+            path = os.path.join(root, fname)
 
-        experiments.append(data)
+            with open(path, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    continue
+
+            if not is_experiment_file(data):
+                continue
+
+            experiments.append(data)
 
     if not experiments:
-        raise RuntimeError("No se encontraron archivos de resultados")
+        raise RuntimeError(
+            "No se encontraron archivos de resultados de experimentos válidos"
+        )
 
     return experiments
 
@@ -85,7 +107,7 @@ def main():
         "--results_dir",
         type=str,
         default=DEFAULT_RESULTS_DIR,
-        help="Directorio con archivos results/*.json",
+        help="Directorio con archivos results/**/*.json",
     )
     parser.add_argument(
         "--sort_by",

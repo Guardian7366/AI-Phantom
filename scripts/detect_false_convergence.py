@@ -8,21 +8,62 @@ from typing import List, Dict
 DEFAULT_RESULTS_DIR = "results"
 
 
+# -------------------------------------------------
+# Carga robusta de experimentos
+# -------------------------------------------------
+
 def load_results(results_dir: str) -> List[Dict]:
     experiments = []
 
-    for fname in os.listdir(results_dir):
-        if not fname.endswith(".json"):
+    search_dirs = [
+        results_dir,
+        os.path.join(results_dir, "runs"),  # 🔑 aquí viven los experimentos reales
+    ]
+
+    for base_dir in search_dirs:
+        if not os.path.isdir(base_dir):
             continue
 
-        with open(os.path.join(results_dir, fname), "r") as f:
-            experiments.append(json.load(f))
+        for fname in os.listdir(base_dir):
+            if not fname.endswith(".json"):
+                continue
+
+            path = os.path.join(base_dir, fname)
+
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+
+            # Solo dicts
+            if not isinstance(data, dict):
+                continue
+
+            # Debe tener señales de experimento
+            if "training" not in data and "evaluation" not in data:
+                continue
+
+            # ID del experimento
+            data.setdefault(
+                "experiment_id",
+                os.path.splitext(fname)[0]
+            )
+
+            experiments.append(data)
 
     if not experiments:
-        raise RuntimeError("No se encontraron resultados")
+        raise RuntimeError(
+            "No se encontraron experimentos válidos para analizar falsa convergencia.\n"
+            "Esperado: JSONs con claves 'training' y/o 'evaluation' en results/ o results/runs/"
+        )
 
     return experiments
 
+
+# -------------------------------------------------
+# Análisis
+# -------------------------------------------------
 
 def analyze_experiment(exp: Dict) -> Dict:
     training = exp.get("training", {})
@@ -36,7 +77,7 @@ def analyze_experiment(exp: Dict) -> Dict:
     mean_length = evaluation.get("mean_length", np.inf)
     episodes = training.get("episodes", np.inf)
 
-    # 1. Éxito alto en entrenamiento, bajo en evaluación
+    # 1. Éxito alto en training, bajo en evaluación
     if train_success > 0.9 and eval_success < 0.7:
         flags.append("OVERFIT_TRAINING")
 
@@ -44,8 +85,9 @@ def analyze_experiment(exp: Dict) -> Dict:
     if train_success > 0.9 and episodes < 0.3 * training.get("episodes", episodes):
         flags.append("TOO_FAST_CONVERGENCE")
 
-    # 3. Reward alto pero episodios largos
-    if eval_success > 0.8 and mean_length > 0.7 * mean_length:
+    # 3. Política ineficiente
+    optimal_len = evaluation.get("optimal_length", mean_length)
+    if eval_success > 0.8 and mean_length > 1.5 * optimal_len:
         flags.append("INEFFICIENT_POLICY")
 
     return {
@@ -57,6 +99,10 @@ def analyze_experiment(exp: Dict) -> Dict:
     }
 
 
+# -------------------------------------------------
+# CLI
+# -------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
         description="Detección automática de falsa convergencia"
@@ -65,7 +111,7 @@ def main():
         "--results_dir",
         type=str,
         default=DEFAULT_RESULTS_DIR,
-        help="Directorio con results/*.json",
+        help="Directorio base de resultados",
     )
     args = parser.parse_args()
 
