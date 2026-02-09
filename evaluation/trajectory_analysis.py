@@ -1,28 +1,91 @@
 import os
 import json
-import argparse
 import numpy as np
 from typing import List, Dict
 
 
+# =================================================
+# Trajectory collection (USADO por visualize_trajectories)
+# =================================================
+
+def collect_trajectories(env, agent, episodes: int = 5, max_steps: int = 500):
+    """
+    Ejecuta episodios en modo inferencia y guarda trayectorias.
+    """
+    trajectories = []
+
+    for ep in range(episodes):
+        state = env.reset()
+        done = False
+        step = 0
+
+        episode_data = {
+            "episode": ep,
+            "positions": [tuple(env.agent_pos)],
+            "rewards": [],
+            "success": False,
+        }
+
+        while not done and step < max_steps:
+            action = agent.select_action(state, epsilon=0.0)
+            next_state, reward, done, info = env.step(action)
+
+            episode_data["positions"].append(tuple(env.agent_pos))
+            episode_data["rewards"].append(reward)
+
+            if info.get("success", False):
+                episode_data["success"] = True
+
+            state = next_state
+            step += 1
+
+        trajectories.append(episode_data)
+
+    return trajectories
+
+
+def save_trajectories(trajectories: List[Dict], output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(trajectories, f, indent=2)
+
+
+# =================================================
+# Result analysis (USADO por compare_results)
+# =================================================
+
 DEFAULT_RESULTS_DIR = "results"
+
+
+def is_experiment_file(data) -> bool:
+    return isinstance(data, dict) and (
+        "training" in data or "evaluation" in data
+    )
 
 
 def load_results(results_dir: str) -> List[Dict]:
     experiments = []
 
-    for fname in os.listdir(results_dir):
-        if not fname.endswith(".json"):
-            continue
+    for root, _, files in os.walk(results_dir):
+        for fname in files:
+            if not fname.endswith(".json"):
+                continue
 
-        path = os.path.join(results_dir, fname)
-        with open(path, "r") as f:
-            data = json.load(f)
+            path = os.path.join(root, fname)
+            with open(path, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    continue
 
-        experiments.append(data)
+            if not is_experiment_file(data):
+                continue
+
+            experiments.append(data)
 
     if not experiments:
-        raise RuntimeError("No se encontraron archivos de resultados")
+        raise RuntimeError("No se encontraron archivos de resultados válidos")
 
     return experiments
 
@@ -44,67 +107,3 @@ def summarize_experiments(experiments: List[Dict]) -> List[Dict]:
         })
 
     return summary
-
-
-def print_table(summary: List[Dict], sort_by: str):
-    summary = sorted(
-        summary,
-        key=lambda x: x.get(sort_by, -np.inf),
-        reverse=True,
-    )
-
-    header = (
-        f"{'Experiment':30} | "
-        f"{'Succ(eval)':10} | "
-        f"{'Rew(eval)':10} | "
-        f"{'Len(eval)':10} | "
-        f"{'Succ(train)':10} | "
-        f"{'Episodes':8}"
-    )
-
-    print("\n=== COMPARATIVA DE EXPERIMENTOS ===\n")
-    print(header)
-    print("-" * len(header))
-
-    for row in summary:
-        print(
-            f"{row['experiment_id'][:30]:30} | "
-            f"{row['success_rate_eval']:.3f}      | "
-            f"{row['mean_reward_eval']:.2f}      | "
-            f"{row['mean_length_eval']:.2f}      | "
-            f"{row['best_success_rate']:.3f}      | "
-            f"{row['episodes']:8}"
-        )
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Comparador de resultados AI Phantom"
-    )
-    parser.add_argument(
-        "--results_dir",
-        type=str,
-        default=DEFAULT_RESULTS_DIR,
-        help="Directorio con archivos results/*.json",
-    )
-    parser.add_argument(
-        "--sort_by",
-        type=str,
-        default="success_rate_eval",
-        choices=[
-            "success_rate_eval",
-            "mean_reward_eval",
-            "mean_length_eval",
-        ],
-        help="Métrica principal para ordenar",
-    )
-    args = parser.parse_args()
-
-    experiments = load_results(args.results_dir)
-    summary = summarize_experiments(experiments)
-    print_table(summary, args.sort_by)
-
-
-if __name__ == "__main__":
-    main()
-
