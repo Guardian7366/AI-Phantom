@@ -1,10 +1,14 @@
 {
   "experiment_id": "maze_dqn_v1_seed42",
+<<<<<<< Updated upstream
   "timestamp": "2026-02-09T21:24:58.834382",
+=======
+  "timestamp": "2026-02-09T21:12:55.828834",
+>>>>>>> Stashed changes
   "training": {
     "episodes": 100,
-    "mean_reward": -3.5184999999999946,
-    "mean_length": 90.22,
+    "mean_reward": -3.672099999999995,
+    "mean_length": 93.34,
     "best_success_rate": 0.99,
     "final_epsilon": 0.81
   },
