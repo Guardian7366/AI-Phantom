@@ -1,6 +1,6 @@
 {
   "experiment_id": "maze_dqn_v1_seed123",
-  "timestamp": "2026-02-09T21:25:13.985499",
+  "timestamp": "2026-02-10T20:50:03.981075",
   "training": {
     "episodes": 100,
     "mean_reward": -3.4799999999999964,
