@@ -90,7 +90,7 @@ class StartScreen:
 
         retro_font_path = os.path.join(FONTS_PATH, "RetroGaming.ttf")
 
-        self.font_title = pygame.font.Font(retro_font_path, 72)
+        self.font_title = pygame.font.Font(retro_font_path, 100)
         self.font_button = pygame.font.Font(retro_font_path, 36)
 
         self.create_buttons()
@@ -177,9 +177,10 @@ class StartScreen:
     def create_buttons(self):
         width, height = self.screen.get_size()
         center_x = width // 2
+        center_y = height // 2
 
         self.btn_start = Button(
-            rect=(center_x - 150, 300, 300, 60),
+            rect=(center_x - 150, center_y - 80, 300, 60),
             text="START",
             font=self.font_button,
             base_color=(40, 40, 60),
@@ -188,7 +189,7 @@ class StartScreen:
         )
 
         self.btn_settings = Button(
-            rect=(center_x - 150, 380, 300, 60),
+            rect=(center_x - 150, center_y, 300, 60),
             text="SETTINGS",
             font=self.font_button,
             base_color=(40, 40, 60),
@@ -197,7 +198,7 @@ class StartScreen:
         )
 
         self.btn_exit = Button(
-            rect=(center_x - 150, 460, 300, 60),
+            rect=(center_x - 150, center_y + 80, 300, 60),
             text="EXIT",
             font=self.font_button,
             base_color=(120, 40, 40),
