@@ -21,6 +21,7 @@ def main():
                     start_screen.screen,
                     start_screen.click_sound,
                     start_screen.font_title,
+                    start_screen.font_statsTitle,
                     start_screen.font_button,
                     start_screen.settings
                 )

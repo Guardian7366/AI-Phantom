@@ -91,6 +91,7 @@ class StartScreen:
         retro_font_path = os.path.join(FONTS_PATH, "RetroGaming.ttf")
 
         self.font_title = pygame.font.Font(retro_font_path, 100)
+        self.font_statsTitle = pygame.font.Font(retro_font_path, 72)
         self.font_button = pygame.font.Font(retro_font_path, 36)
 
         self.create_buttons()

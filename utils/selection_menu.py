@@ -7,13 +7,14 @@ from utils.settings_state import SettingsState
 
 class SelectionMenuScreen:
 
-    def __init__(self, screen, click_sound, font_title, font_button, settings: SettingsState):
+    def __init__(self, screen, click_sound, font_title, font_statsTitle, font_button, settings: SettingsState):
         self.screen = screen
         self.clock = pygame.time.Clock()
         self.running = True
 
         self.click_sound = click_sound
         self.font_title = font_title
+        self.font_statsTitle = font_statsTitle
         self.font_button = font_button
 
         self.settings = settings
@@ -213,7 +214,7 @@ class SelectionMenuScreen:
         pygame.draw.rect(self.screen, (20, 20, 30), panel)
         pygame.draw.rect(self.screen, (255, 255, 255), panel, 3)
 
-        title = self.font_title.render("PLAYER STATS", False, (255, 255, 255))
+        title = self.font_statsTitle.render("PLAYER STATS", False, (255, 255, 255))
         self.screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 60)))
 
         # Placeholder seguro
