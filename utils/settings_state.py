@@ -28,7 +28,7 @@ class SettingsState:
 
     # --------------------------------------------------------
 
-    def toggle_fullscreen(self, current_screen, window_size):
+    def toggle_fullscreen(self, window_size):
         self.fullscreen = not self.fullscreen
 
         if self.fullscreen:

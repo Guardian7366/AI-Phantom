@@ -224,18 +224,6 @@ class StartScreen:
 
     # --------------------------------------------------------
 
-    def toggle_fullscreen(self):
-        self.settings.fullscreen = not self.settings.fullscreen
-
-        if self.settings.fullscreen:
-            self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-        else:
-            self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-
-        self.create_settings_buttons()
-
-    # --------------------------------------------------------
-
     def draw_title(self):
         width, height = self.screen.get_size()
         title_surface = self.font_title.render("AI PHANTOM", False, (255, 255, 255))
@@ -404,7 +392,6 @@ class StartScreen:
         left_sc, right_sc = self.screen_arrows
         if left_sc.collidepoint(pos) or right_sc.collidepoint(pos):
             self.screen = self.settings.toggle_fullscreen(
-                self.screen,
                 (WINDOW_WIDTH, WINDOW_HEIGHT)
             )
             self.create_buttons()
