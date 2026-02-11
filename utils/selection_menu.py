@@ -100,27 +100,24 @@ class SelectionMenuScreen:
     # BOTONES SUPERIORES
     # --------------------------------------------------------
 
-    def create_top_buttons(self):
-        width, height = self.screen.get_size()
+    def create_top_buttons(self): 
+        width, height = self.screen.get_size() 
+        self.btn_back_menu = Button( 
+        rect=(30, 30, 140, 50), 
+        text="BACK", 
+        font=self.font_button, 
+        base_color=(60, 60, 90), 
+        hover_color=(90, 90, 140), 
+        click_sound=self.click_sound)
 
-        self.btn_back_menu = Button(
-            rect=(30, 30, 140, 50),
-            text="BACK",
-            font=self.font_button,
-            base_color=(60, 60, 90),
-            hover_color=(90, 90, 140),
-            click_sound=self.click_sound
-        )
-
-        self.btn_settings = Button(
-            rect=(width - 280, 30, 250, 50),
-            text="SETTINGS",
-            font=self.font_button,
-            base_color=(40, 40, 60),
-            hover_color=(80, 80, 120),
-            click_sound=self.click_sound
-        )
-
+        self.btn_settings = Button( 
+        rect=(width - 280, 30, 250, 50), 
+        text="SETTINGS", 
+        font=self.font_button, 
+        base_color=(40, 40, 60), 
+        hover_color=(80, 80, 120), 
+        click_sound=self.click_sound)
+        
     # --------------------------------------------------------
     # BOTÓN BACK DE SETTINGS
     # --------------------------------------------------------
