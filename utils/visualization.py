@@ -1,6 +1,7 @@
 import pygame
 import os
 import math
+from utils.settings_state import SettingsState
 
 
 # ============================================================
@@ -71,18 +72,16 @@ class Button:
 class StartScreen:
 
     def __init__(self):
+        # Audio config
+        self.settings = SettingsState()
         self.clock = pygame.time.Clock()
-        self.fullscreen = False
+        self.settings.fullscreen = False
 
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         pygame.display.set_caption("AI Phantom")
 
         self.running = True
         self.show_settings = False
-
-        # Audio config
-        self.music_volume = 5
-        self.sfx_volume = 5
 
         pygame.mixer.init()
 
@@ -160,7 +159,7 @@ class StartScreen:
         click_path = os.path.join(SOUNDS_PATH, "ButtonClick.mp3")
         if os.path.exists(click_path):
             self.click_sound = pygame.mixer.Sound(click_path)
-            self.click_sound.set_volume(self.sfx_volume / 10)
+            self.settings.apply_sfx_volume(self.click_sound)
         else:
             self.click_sound = None
 
@@ -170,7 +169,7 @@ class StartScreen:
         music_path = os.path.join(SOUNDS_PATH, "MenuTheme.mp3")
         if os.path.exists(music_path):
             pygame.mixer.music.load(music_path)
-            pygame.mixer.music.set_volume(self.music_volume / 10)
+            self.settings.apply_music_volume()
             pygame.mixer.music.play(-1)
 
     # --------------------------------------------------------
@@ -223,9 +222,9 @@ class StartScreen:
     # --------------------------------------------------------
 
     def toggle_fullscreen(self):
-        self.fullscreen = not self.fullscreen
+        self.settings.fullscreen = not self.settings.fullscreen
 
-        if self.fullscreen:
+        if self.settings.fullscreen:
             self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         else:
             self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -326,7 +325,7 @@ class StartScreen:
         music_rect = music_label.get_rect(midleft=(left_margin, current_y))
         self.screen.blit(music_label, music_rect)
 
-        left, right = self.draw_volume_bar(bar_center_x, current_y, self.music_volume)
+        left, right = self.draw_volume_bar(bar_center_x, current_y, self.settings.music_volume)
         self.music_arrows = self.draw_arrows(left, right, current_y)
 
         # ====================================================
@@ -339,7 +338,7 @@ class StartScreen:
         sfx_rect = sfx_label.get_rect(midleft=(left_margin, current_y))
         self.screen.blit(sfx_label, sfx_rect)
 
-        left, right = self.draw_volume_bar(bar_center_x, current_y, self.sfx_volume)
+        left, right = self.draw_volume_bar(bar_center_x, current_y, self.settings.sfx_volume)
         self.sfx_arrows = self.draw_arrows(left, right, current_y)
 
         # ====================================================
@@ -352,7 +351,7 @@ class StartScreen:
         mode_rect_label = mode_label.get_rect(midleft=(left_margin, current_y))
         self.screen.blit(mode_label, mode_rect_label)
 
-        mode_text = "FULLSCREEN" if self.fullscreen else "WINDOWED"
+        mode_text = "FULLSCREEN" if self.settings.fullscreen else "WINDOWED"
         mode_surface = self.font_button.render(mode_text, False, (200, 200, 200))
 
         mode_rect = mode_surface.get_rect(center=(bar_center_x, current_y))
@@ -383,27 +382,29 @@ class StartScreen:
 
         left_m, right_m = self.music_arrows
         if left_m.collidepoint(pos):
-            self.music_volume = max(0, self.music_volume - 1)
-            pygame.mixer.music.set_volume(self.music_volume / 10)
+            self.settings.music_volume = max(0, self.settings.music_volume - 1)
+            self.settings.apply_music_volume()
 
         if right_m.collidepoint(pos):
-            self.music_volume = min(10, self.music_volume + 1)
-            pygame.mixer.music.set_volume(self.music_volume / 10)
+            self.settings.music_volume = min(10, self.settings.music_volume + 1)
+            self.settings.apply_music_volume()
 
         left_s, right_s = self.sfx_arrows
         if left_s.collidepoint(pos):
-            self.sfx_volume = max(0, self.sfx_volume - 1)
-            if self.click_sound:
-                self.click_sound.set_volume(self.sfx_volume / 10)
+            self.settings.sfx_volume = max(0, self.settings.sfx_volume - 1)
+            self.settings.apply_sfx_volume(self.click_sound)
 
         if right_s.collidepoint(pos):
-            self.sfx_volume = min(10, self.sfx_volume + 1)
-            if self.click_sound:
-                self.click_sound.set_volume(self.sfx_volume / 10)
+            self.settings.sfx_volume = min(10, self.settings.sfx_volume + 1)
+            self.settings.apply_sfx_volume(self.click_sound)
 
         left_sc, right_sc = self.screen_arrows
         if left_sc.collidepoint(pos) or right_sc.collidepoint(pos):
-            self.toggle_fullscreen()
+            self.screen = self.settings.toggle_fullscreen(
+                self.screen,
+                (WINDOW_WIDTH, WINDOW_HEIGHT)
+            )
+            self.create_settings_buttons()
 
         if self.btn_back.is_clicked(event):
             self.show_settings = False
@@ -424,7 +425,7 @@ class StartScreen:
                     self.handle_settings_click(event)
                 else:
                     if self.btn_start.is_clicked(event):
-                        print("Start pressed (next screen placeholder)")
+                        return "selection_menu"
 
                     if self.btn_settings.is_clicked(event):
                         self.show_settings = True
@@ -454,3 +455,5 @@ class StartScreen:
                 self.btn_exit.draw(self.screen)
 
             pygame.display.flip()
+        
+        return None
