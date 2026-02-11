@@ -1,4 +1,6 @@
 import pygame
+import math
+import os
 from utils.visualization import Button, FPS, WINDOW_WIDTH, WINDOW_HEIGHT
 from utils.settings_state import SettingsState
 
@@ -18,7 +20,81 @@ class SelectionMenuScreen:
         self.show_settings = False
 
         self.create_top_buttons()
+        self.load_card_images()
         self.create_cards()
+        self.create_settings_buttons()
+        
+        # ====================================================
+        # FONDO ANIMADO (MISMO SISTEMA PROTEGIDO)
+        # ====================================================
+        self.bg_time = 0
+        self.bg_speed = 0.5
+        self.bg_amplitude = 25
+
+        self.load_background()
+        
+
+    # --------------------------------------------------------
+    # CARGA IMÁGENES DE LAS CARDS
+    # --------------------------------------------------------
+
+    def load_card_images(self):
+        image_folder = os.path.join("assets", "images")
+
+        image_names = [
+            "mazeCardBackTrain.png",
+            "archeryCardBackTrain.png",
+            "mazeCardBackHuman.png",
+            "archeryCardBackHuman.png"
+        ]
+
+        self.card_images_original = []
+
+        for name in image_names:
+            path = os.path.join(image_folder, name)
+            if os.path.exists(path):
+                img = pygame.image.load(path).convert_alpha()
+            else:
+                img = None
+
+            self.card_images_original.append(img)
+
+    # ========================================================
+    # BACKGROUND SYSTEM (ANTI-VACÍO VISUAL)
+    # ========================================================
+
+
+    def load_background(self):
+        bg_path = os.path.join("assets", "images", "newBackground1.png")
+
+        if os.path.exists(bg_path):
+            self.background_original = pygame.image.load(bg_path).convert()
+        else:
+            self.background_original = None
+
+        self.background = None
+
+    def draw_background(self):
+        if not self.background_original:
+            return
+
+        width, height = self.screen.get_size()
+
+        extra_height = self.bg_amplitude * 2
+
+        if (
+            self.background is None
+            or self.background.get_size() != (width, height + extra_height)
+        ):
+            self.background = pygame.transform.scale(
+                self.background_original,
+                (width, height + extra_height)
+            )
+
+        self.bg_time += self.bg_speed
+        offset_y = math.sin(self.bg_time * 0.02) * self.bg_amplitude
+
+        self.screen.blit(self.background, (0, offset_y - self.bg_amplitude))
 
     # --------------------------------------------------------
     # BOTONES SUPERIORES
@@ -27,7 +103,7 @@ class SelectionMenuScreen:
     def create_top_buttons(self):
         width, height = self.screen.get_size()
 
-        self.btn_back = Button(
+        self.btn_back_menu = Button(
             rect=(30, 30, 140, 50),
             text="BACK",
             font=self.font_button,
@@ -37,11 +113,25 @@ class SelectionMenuScreen:
         )
 
         self.btn_settings = Button(
-            rect=(width - 170, 30, 140, 50),
+            rect=(width - 280, 30, 250, 50),
             text="SETTINGS",
             font=self.font_button,
             base_color=(40, 40, 60),
             hover_color=(80, 80, 120),
+            click_sound=self.click_sound
+        )
+
+    # --------------------------------------------------------
+    # BOTÓN BACK DE SETTINGS
+    # --------------------------------------------------------
+
+    def create_settings_buttons(self):
+        self.btn_back_settings = Button(
+            rect=(0, 0, 180, 55),
+            text="BACK",
+            font=self.font_button,
+            base_color=(60, 60, 90),
+            hover_color=(90, 90, 140),
             click_sound=self.click_sound
         )
 
@@ -72,10 +162,13 @@ class SelectionMenuScreen:
 
                 rect = pygame.Rect(x, y, card_width, card_height)
 
+                index = row * 2 + col
+
                 self.cards.append({
                     "rect": rect,
-                    "title": titles[row * 2 + col],
-                    "scale": 1.0
+                    "title": titles[index],
+                    "scale": 1.0,
+                    "image": self.card_images_original[index]
                 })
 
     def draw_cards(self, mouse_pos):
@@ -93,7 +186,15 @@ class SelectionMenuScreen:
                 rect.height * (card["scale"] - 1)
             )
 
-            pygame.draw.rect(self.screen, (30, 30, 45), scaled_rect)
+            if card["image"]:
+                scaled_image = pygame.transform.scale(
+                    card["image"],
+                    (scaled_rect.width, scaled_rect.height)
+                )
+                self.screen.blit(scaled_image, scaled_rect)
+            else:
+                pygame.draw.rect(self.screen, (30, 30, 45), scaled_rect)
+
             pygame.draw.rect(self.screen, (255, 255, 255), scaled_rect, 3)
 
             title_surface = self.font_button.render(card["title"], False, (255, 255, 255))
@@ -149,50 +250,83 @@ class SelectionMenuScreen:
     def draw_settings_panel(self):
 
         width, height = self.screen.get_size()
+        panel = pygame.Rect(width * 0.15, height * 0.2, width * 0.7, height * 0.65)
 
-        panel = pygame.Rect(width * 0.2, height * 0.25, width * 0.6, height * 0.6)
 
         pygame.draw.rect(self.screen, (20, 20, 30), panel)
         pygame.draw.rect(self.screen, (255, 255, 255), panel, 3)
 
-        center_x = panel.centerx
-        current_y = panel.top + 100
+        # ==========================================
+        # LAYOUT HORIZONTAL EN COLUMNAS
+        # ==========================================
+        left_column_x = panel.left + 50
 
-        # MUSIC
+        # ancho real de la barra (igual al que usa draw_volume_bar)
+        block_size = 22
+        spacing = 6
+        bar_width = 10 * block_size + 9 * spacing  # 274px
+
+        # ahora centramos la barra en la mitad derecha del panel
+        right_half_center = panel.left + panel.width * 0.65
+        bar_column_x = right_half_center
+
+
+        top_margin = 80
+        section_spacing = 100
+
+        current_y = panel.top + top_margin
+
+        # ================= MUSIC =================
         music_label = self.font_button.render("Music", False, (255, 255, 255))
-        self.screen.blit(music_label, music_label.get_rect(midleft=(panel.left + 40, current_y)))
+        self.screen.blit(
+            music_label,
+            music_label.get_rect(midleft=(left_column_x, current_y))
+        )
 
-        left, right = self.draw_volume_bar(center_x, current_y, self.settings.music_volume)
+        left, right = self.draw_volume_bar(bar_column_x, current_y, self.settings.music_volume)
         self.music_arrows = self.draw_arrows(left, right, current_y)
 
-        # SFX
-        current_y += 100
+        # ================= SFX =================
+        current_y += section_spacing
 
         sfx_label = self.font_button.render("SFX", False, (255, 255, 255))
-        self.screen.blit(sfx_label, sfx_label.get_rect(midleft=(panel.left + 40, current_y)))
+        self.screen.blit(
+            sfx_label,
+            sfx_label.get_rect(midleft=(left_column_x, current_y))
+        )
 
-        left, right = self.draw_volume_bar(center_x, current_y, self.settings.sfx_volume)
+        left, right = self.draw_volume_bar(bar_column_x, current_y, self.settings.sfx_volume)
         self.sfx_arrows = self.draw_arrows(left, right, current_y)
 
-        # SCREEN MODE
-        current_y += 100
+        # ================= SCREEN =================
+        current_y += section_spacing
 
         mode_label = self.font_button.render("Screen", False, (255, 255, 255))
-        self.screen.blit(mode_label, mode_label.get_rect(midleft=(panel.left + 40, current_y)))
+        self.screen.blit(
+            mode_label,
+            mode_label.get_rect(midleft=(left_column_x, current_y))
+        )
 
         mode_text = "FULLSCREEN" if self.settings.fullscreen else "WINDOWED"
         mode_surface = self.font_button.render(mode_text, False, (200, 200, 200))
-        mode_rect = mode_surface.get_rect(center=(center_x, current_y))
+        mode_rect = mode_surface.get_rect(center=(bar_column_x, current_y))
         self.screen.blit(mode_surface, mode_rect)
 
-        left_x = mode_rect.left - 25
-        right_x = mode_rect.right + 25
+        left_x = mode_rect.left - 35
+        right_x = mode_rect.right + 35
         self.screen_arrows = self.draw_arrows(left_x, right_x, current_y)
 
-        # BACK
-        self.btn_back.rect.center = (panel.centerx, panel.bottom - 50)
-        self.btn_back.update(pygame.mouse.get_pos())
-        self.btn_back.draw(self.screen)
+        # ================= BACK BUTTON =================
+        self.btn_back_settings.rect.center = (
+            panel.centerx,
+            panel.bottom - 50
+        )
+
+        self.btn_back_settings.update(pygame.mouse.get_pos())
+        self.btn_back_settings.draw(self.screen)
+
+
+
 
     def handle_settings_click(self, event):
 
@@ -228,7 +362,7 @@ class SelectionMenuScreen:
             self.create_top_buttons()
             self.create_cards()
 
-        if self.btn_back.is_clicked(event):
+        if self.btn_back_settings.is_clicked(event):
             self.show_settings = False
 
     # --------------------------------------------------------
@@ -250,7 +384,7 @@ class SelectionMenuScreen:
                 if self.show_settings:
                     self.handle_settings_click(event)
                 else:
-                    if self.btn_back.is_clicked(event):
+                    if self.btn_back_menu.is_clicked(event):
                         return "start"
 
                     if self.btn_settings.is_clicked(event):
@@ -263,13 +397,16 @@ class SelectionMenuScreen:
 
             self.screen.fill((18, 18, 28))
 
+            # 🔥 Fondo animado protegido
+            self.draw_background()
+
             if self.show_settings:
                 self.draw_settings_panel()
             else:
-                self.btn_back.update(mouse_pos)
+                self.btn_back_menu.update(mouse_pos)
                 self.btn_settings.update(mouse_pos)
 
-                self.btn_back.draw(self.screen)
+                self.btn_back_menu.draw(self.screen)
                 self.btn_settings.draw(self.screen)
 
                 self.draw_cards(mouse_pos)
@@ -277,4 +414,3 @@ class SelectionMenuScreen:
             pygame.display.flip()
 
         return None
-
