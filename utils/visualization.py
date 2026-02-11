@@ -175,7 +175,8 @@ class StartScreen:
     # --------------------------------------------------------
 
     def create_buttons(self):
-        center_x = WINDOW_WIDTH // 2
+        width, height = self.screen.get_size()
+        center_x = width // 2
 
         self.btn_start = Button(
             rect=(center_x - 150, 300, 300, 60),
@@ -404,6 +405,7 @@ class StartScreen:
                 self.screen,
                 (WINDOW_WIDTH, WINDOW_HEIGHT)
             )
+            self.create_buttons()
             self.create_settings_buttons()
 
         if self.btn_back.is_clicked(event):
