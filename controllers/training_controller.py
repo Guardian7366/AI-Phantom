@@ -56,11 +56,16 @@ class TrainingController:
             else datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         )
 
-        # Métricas
+        # ================================
+        # Métricas completas por episodio
+        # ================================
         self.episode_rewards = []
         self.episode_lengths = []
-        self.success_history = deque(maxlen=success_window)
+        self.full_success_history = []  # ← NUEVO (historial completo)
         self.loss_history = []
+
+        # Ventana deslizante para early stopping
+        self.success_history = deque(maxlen=success_window)
 
         self.best_success_rate = 0.0
         self.no_improve_counter = 0
@@ -106,15 +111,22 @@ class TrainingController:
                     success = info.get("success", False)
                     break
 
-            # Registrar métricas por episodio
-            self.episode_rewards.append(episode_reward)
+            # ==========================
+            # Registrar métricas episodio
+            # ==========================
+            self.episode_rewards.append(float(episode_reward))
             self.episode_lengths.append(step + 1)
-            self.success_history.append(1 if success else 0)
+
+            success_int = 1 if success else 0
+            self.success_history.append(success_int)
+            self.full_success_history.append(success_int)
 
             if episode_loss:
                 self.loss_history.append(float(np.mean(episode_loss)))
+            else:
+                self.loss_history.append(0.0)
 
-            # Early stopping / progreso
+            # Early stopping
             if self._check_and_handle_progress(episode):
                 break
 
@@ -129,6 +141,7 @@ class TrainingController:
 
         # Construir resumen final
         training_summary = self._build_training_summary()
+
         experiment_results = {
             "experiment_id": self.experiment_id,
             "timestamp": datetime.utcnow().isoformat(),
@@ -139,22 +152,18 @@ class TrainingController:
         results_path = os.path.join(
             self.results_dir, f"{self.experiment_id}.json"
         )
+
         with open(results_path, "w") as f:
             json.dump(experiment_results, f, indent=2)
 
         return experiment_results
 
     def _check_and_handle_progress(self, episode: int) -> bool:
-        """
-        Evalúa métricas agregadas y aplica early stopping.
-        Devuelve True si debe detener el entrenamiento.
-        """
         if len(self.success_history) < self.success_window:
             return False
 
         success_rate = float(np.mean(self.success_history))
 
-        # Guardar mejor modelo
         if success_rate > self.best_success_rate:
             self.best_success_rate = success_rate
             self.no_improve_counter = 0
@@ -166,7 +175,6 @@ class TrainingController:
         else:
             self.no_improve_counter += 1
 
-        # Early stopping por convergencia real
         if success_rate >= self.success_threshold:
             print(
                 f"[Early Stop] Success rate alcanzado: "
@@ -174,7 +182,6 @@ class TrainingController:
             )
             return True
 
-        # Early stopping por estancamiento
         if self.no_improve_counter >= self.early_stopping_patience:
             print(
                 f"[Early Stop] Sin mejora durante "
@@ -185,9 +192,6 @@ class TrainingController:
         return False
 
     def _run_evaluation(self) -> Dict[str, Any]:
-        """
-        Ejecuta evaluación pura del mejor modelo entrenado.
-        """
         best_checkpoint = os.path.join(
             self.checkpoint_dir, "best_model.pth"
         )
@@ -207,4 +211,12 @@ class TrainingController:
             "mean_length": float(np.mean(self.episode_lengths)),
             "best_success_rate": float(self.best_success_rate),
             "final_epsilon": self._compute_epsilon(len(self.episode_rewards)),
+
+            # ==========================
+            # NUEVO: historial completo
+            # ==========================
+            "reward_history": self.episode_rewards,
+            "length_history": self.episode_lengths,
+            "success_history": self.full_success_history,
+            "loss_history": self.loss_history,
         }

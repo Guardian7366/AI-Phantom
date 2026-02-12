@@ -5,30 +5,25 @@ import numpy as np
 from typing import List, Dict
 
 
-DEFAULT_RESULTS_DIR = "results"
+DEFAULT_RESULTS_DIR = "results/runs"
 
 
-# -------------------------------------------------
-# Carga robusta de experimentos
-# -------------------------------------------------
+# ---------------------------------------------------------
+# CARGA DE RESULTADOS
+# ---------------------------------------------------------
 
 def load_results(results_dir: str) -> List[Dict]:
     experiments = []
 
-    search_dirs = [
-        results_dir,
-        os.path.join(results_dir, "runs"),  # 🔑 aquí viven los experimentos reales
-    ]
+    if not os.path.exists(results_dir):
+        raise RuntimeError(f"Directorio no encontrado: {results_dir}")
 
-    for base_dir in search_dirs:
-        if not os.path.isdir(base_dir):
-            continue
-
-        for fname in os.listdir(base_dir):
+    for root, _, files in os.walk(results_dir):
+        for fname in files:
             if not fname.endswith(".json"):
                 continue
 
-            path = os.path.join(base_dir, fname)
+            path = os.path.join(root, fname)
 
             try:
                 with open(path, "r") as f:
@@ -36,34 +31,30 @@ def load_results(results_dir: str) -> List[Dict]:
             except Exception:
                 continue
 
-            # Solo dicts
             if not isinstance(data, dict):
                 continue
 
-            # Debe tener señales de experimento
-            if "training" not in data and "evaluation" not in data:
+            if "training" not in data or "evaluation" not in data:
                 continue
 
-            # ID del experimento
             data.setdefault(
                 "experiment_id",
-                os.path.splitext(fname)[0]
+                fname.replace(".json", "")
             )
 
             experiments.append(data)
 
     if not experiments:
         raise RuntimeError(
-            "No se encontraron experimentos válidos para analizar falsa convergencia.\n"
-            "Esperado: JSONs con claves 'training' y/o 'evaluation' en results/ o results/runs/"
+            "No se encontraron experimentos válidos"
         )
 
     return experiments
 
 
-# -------------------------------------------------
-# Análisis
-# -------------------------------------------------
+# ---------------------------------------------------------
+# ANÁLISIS INDIVIDUAL
+# ---------------------------------------------------------
 
 def analyze_experiment(exp: Dict) -> Dict:
     training = exp.get("training", {})
@@ -71,53 +62,98 @@ def analyze_experiment(exp: Dict) -> Dict:
 
     flags = []
 
-    train_success = training.get("best_success_rate", 0.0)
-    eval_success = evaluation.get("success_rate", 0.0)
+    train_success = float(training.get("best_success_rate", 0.0))
+    eval_success = float(evaluation.get("success_rate", 0.0))
+    mean_length = float(evaluation.get("mean_length", np.inf))
 
-    mean_length = evaluation.get("mean_length", np.inf)
-    episodes = training.get("episodes", np.inf)
+    episodes = int(training.get("episodes", 0))
 
-    # 1. Éxito alto en training, bajo en evaluación
-    if train_success > 0.9 and eval_success < 0.7:
-        flags.append("OVERFIT_TRAINING")
+    # -------------------------------------------------
+    # 1️⃣ Generalization gap real
+    # -------------------------------------------------
+    gap = train_success - eval_success
 
-    # 2. Convergencia sospechosamente rápida
-    if train_success > 0.9 and episodes < 0.3 * training.get("episodes", episodes):
-        flags.append("TOO_FAST_CONVERGENCE")
+    if gap > 0.2:
+        flags.append("GENERALIZATION_GAP")
 
-    # 3. Política ineficiente
-    optimal_len = evaluation.get("optimal_length", mean_length)
-    if eval_success > 0.8 and mean_length > 1.5 * optimal_len:
-        flags.append("INEFFICIENT_POLICY")
+    # -------------------------------------------------
+    # 2️⃣ Convergencia sospechosamente rápida
+    # (heurística estable)
+    # -------------------------------------------------
+    if train_success > 0.95 and episodes < 150:
+        flags.append("SUSPICIOUSLY_FAST")
+
+    # -------------------------------------------------
+    # 3️⃣ Política ineficiente
+    # -------------------------------------------------
+    optimal_length = evaluation.get("optimal_length", None)
+
+    if optimal_length is not None:
+        if mean_length > 1.5 * optimal_length:
+            flags.append("INEFFICIENT_POLICY")
+    else:
+        # fallback robusto
+        if eval_success > 0.8 and mean_length > 20:
+            flags.append("POTENTIALLY_INEFFICIENT")
 
     return {
         "experiment_id": exp.get("experiment_id", "unknown"),
         "train_success": train_success,
         "eval_success": eval_success,
         "mean_length_eval": mean_length,
+        "episodes": episodes,
+        "gap": gap,
         "flags": flags,
     }
 
 
-# -------------------------------------------------
-# CLI
-# -------------------------------------------------
+# ---------------------------------------------------------
+# ANÁLISIS GLOBAL MULTI-SEED
+# ---------------------------------------------------------
+
+def analyze_global_stability(reports: List[Dict]) -> Dict:
+    eval_scores = [r["eval_success"] for r in reports]
+
+    mean_eval = float(np.mean(eval_scores))
+    std_eval = float(np.std(eval_scores))
+
+    flags = []
+
+    # Alta variabilidad entre seeds
+    if std_eval > 0.15:
+        flags.append("HIGH_SEED_VARIANCE")
+
+    # Éxito promedio bajo
+    if mean_eval < 0.7:
+        flags.append("LOW_GLOBAL_PERFORMANCE")
+
+    return {
+        "mean_eval_success": mean_eval,
+        "std_eval_success": std_eval,
+        "flags": flags,
+    }
+
+
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Detección automática de falsa convergencia"
+        description="Detección avanzada de falsa convergencia"
     )
     parser.add_argument(
         "--results_dir",
         type=str,
         default=DEFAULT_RESULTS_DIR,
-        help="Directorio base de resultados",
+        help="Directorio con resultados JSON",
     )
     args = parser.parse_args()
 
     experiments = load_results(args.results_dir)
 
     reports = [analyze_experiment(exp) for exp in experiments]
+    global_report = analyze_global_stability(reports)
 
     print("\n=== DETECCIÓN DE FALSA CONVERGENCIA ===\n")
 
@@ -127,10 +163,25 @@ def main():
             f"{r['experiment_id'][:30]:30} | "
             f"Train: {r['train_success']:.2f} | "
             f"Eval: {r['eval_success']:.2f} | "
-            f"Len: {r['mean_length_eval']:.1f} | "
+            f"Gap: {r['gap']:.2f} | "
+            f"Eps: {r['episodes']:4d} | "
             f"{status}"
         )
+
+    print("\n--- Global Stability ---")
+    print(
+        f"Mean Eval Success : {global_report['mean_eval_success']:.3f}"
+    )
+    print(
+        f"Std  Eval Success : {global_report['std_eval_success']:.3f}"
+    )
+
+    if global_report["flags"]:
+        print("Global Flags       :", " | ".join(global_report["flags"]))
+    else:
+        print("Global Flags       : OK")
 
 
 if __name__ == "__main__":
     main()
+
