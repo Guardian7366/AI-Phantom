@@ -50,21 +50,33 @@ python -m scripts.evaluate_best_model
 python -m scripts.collect_trajectories
 ```
 
+9. Evaluates the best model under action noise (perturbed evaluation).
+
+```
+python -m scripts.perturbed_evaluation
+```
+
+10. Evaluates the best model in a stochastic environment (stochastic evaluation).
+
+```
+python -m scripts.stochastic_evaluation
+```
+
 ## Visualization and Analysis
 
-9. Visualizes agent trajectories from inference runs, using the best model and configuration.
+11. Visualizes agent trajectories from inference runs, using the best model and configuration.
 
 ```
 python -m scripts.visualize_trajectories
 ```
 
-10. Visualizes and analyzes experiment results and metrics.
+12. Visualizes and analyzes experiment results and metrics.
 
 ```
 python -m scripts.visualize_results
 ```
 
-11. Compares experiment results, aggregating and analyzing metrics across runs.
+13. Compares experiment results, aggregating and analyzing metrics across runs.
 
 ```
 python -m scripts.compare_results
