@@ -1,4 +1,4 @@
-experiment_name: maze_dqn_v1
+experiment_name: maze_dqn_v2
 
 seeds:
   - 42
@@ -6,53 +6,55 @@ seeds:
   - 999
 
 # -----------------------------------------
-# Environment (Maze)
+# Environment
 # -----------------------------------------
 environment:
   grid:
-    - [0, 0, 0, 0, 0]
-    - [0, 1, 1, 1, 0]
-    - [0, 0, 0, 1, 0]
-    - [1, 1, 0, 0, 0]
-    - [0, 0, 0, 1, 0]
+    - [0,0,0,0,0,0,0,0]
+    - [0,1,1,1,0,1,1,0]
+    - [0,0,0,1,0,0,1,0]
+    - [1,1,0,0,0,1,0,0]
+    - [0,0,0,1,0,0,0,1]
+    - [0,1,0,0,0,1,0,0]
+    - [0,1,0,1,0,0,0,0]
+    - [0,0,0,0,1,1,0,0]
 
-  start: [0, 0]
-  goal: [4, 4]
+  random_start_goal: true
+  max_steps: 400
 
-  max_steps: 500
 
 # -----------------------------------------
 # Training
 # -----------------------------------------
 training:
-  num_episodes: 800
-  max_steps_per_episode: 500
+  num_episodes: 3000
+  max_steps_per_episode: 400
 
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_episodes: 500
+  epsilon_decay_episodes: 2000
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
 
-  early_stopping_patience: 100
-  success_threshold: 0.95
-  success_window: 100
+  early_stopping_patience: 400
+  success_threshold: 0.85
+  success_window: 200
+
 
 # -----------------------------------------
-# Agent (DQN)
+# Agent
 # -----------------------------------------
 agent:
   gamma: 0.99
-  learning_rate: 0.0005
+  learning_rate: 0.0003
 
-  batch_size: 64
-  replay_buffer_size: 50000
-  min_replay_size: 1000
+  batch_size: 128
+  replay_buffer_size: 100000
+  min_replay_size: 5000
 
-  target_update_frequency: 500
+  target_update_frequency: 1000
 
   hidden_layers:
     - 128
     - 128
-

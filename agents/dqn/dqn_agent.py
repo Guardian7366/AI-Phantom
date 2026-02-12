@@ -38,7 +38,8 @@ class DQNAgent:
         lr: float = 1e-3,
         batch_size: int = 64,
         target_update_freq: int = 1000,
-        device: Optional[str] = None,
+        min_replay_size: int = 1000,
+        device: Optional[str] = None
     ):
         # Guardar parámetros para factory
         self._init_params = dict(
@@ -51,6 +52,7 @@ class DQNAgent:
             device=device,
         )
 
+        self.min_replay_size = min_replay_size
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.replay_buffer = replay_buffer
@@ -150,7 +152,7 @@ class DQNAgent:
         if not self.training:
             return None
 
-        if len(self.replay_buffer) < self.batch_size:
+        if len(self.replay_buffer) < max(self.batch_size, self.min_replay_size):
             return None
 
         states, actions, rewards, next_states, dones = self.replay_buffer.sample(
@@ -166,8 +168,11 @@ class DQNAgent:
         q_values = self.policy_net(states).gather(1, actions)
 
         with torch.no_grad():
-            max_next_q = self.target_net(next_states).max(1, keepdim=True)[0]
-            target_q = rewards + (1 - dones) * self.gamma * max_next_q
+            # Double DQN
+            next_actions = self.policy_net(next_states).argmax(1, keepdim=True)
+            next_q = self.target_net(next_states).gather(1, next_actions)
+            target_q = rewards + (1 - dones) * self.gamma * next_q
+
 
         loss = self.loss_fn(q_values, target_q)
 
