@@ -9,19 +9,46 @@ from agents.dqn.replay_buffer import ReplayBuffer
 
 
 class DQN(nn.Module):
+    """
+    Dueling DQN Architecture
+    Separa Value y Advantage streams.
+    """
+
     def __init__(self, state_dim: int, action_dim: int):
         super().__init__()
 
-        self.net = nn.Sequential(
+        self.feature_layer = nn.Sequential(
             nn.Linear(state_dim, 128),
             nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+        )
+
+        # Value stream
+        self.value_stream = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+
+        # Advantage stream
+        self.advantage_stream = nn.Sequential(
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, action_dim),
         )
 
     def forward(self, x):
-        return self.net(x)
+        features = self.feature_layer(x)
+
+        value = self.value_stream(features)
+        advantage = self.advantage_stream(features)
+
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,a)))
+        q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
+
+        return q_values
+
 
 
 class DQNAgent:
@@ -69,7 +96,12 @@ class DQNAgent:
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.optimizer = optim.Adam(
+            self.policy_net.parameters(),
+            lr=lr,
+            eps=1e-5
+        )
+
         self.loss_fn = nn.SmoothL1Loss()
 
         self.training = True
@@ -159,22 +191,27 @@ class DQNAgent:
             self.batch_size
         )
 
-        states = torch.tensor(states).to(self.device)
-        actions = torch.tensor(actions).unsqueeze(1).to(self.device)
-        rewards = torch.tensor(rewards).unsqueeze(1).to(self.device)
-        next_states = torch.tensor(next_states).to(self.device)
-        dones = torch.tensor(dones).unsqueeze(1).to(self.device)
+        states = torch.tensor(states, dtype=torch.float32).to(self.device)
+        actions = torch.tensor(actions, dtype=torch.long).unsqueeze(1).to(self.device)
+        rewards = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1).to(self.device)
+        next_states = torch.tensor(next_states, dtype=torch.float32).to(self.device)
+        dones = torch.tensor(dones, dtype=torch.float32).unsqueeze(1).to(self.device)
 
         q_values = self.policy_net(states).gather(1, actions)
 
         with torch.no_grad():
-            # Double DQN
-            next_actions = self.policy_net(next_states).argmax(1, keepdim=True)
-            next_q = self.target_net(next_states).gather(1, next_actions)
-            target_q = rewards + (1 - dones) * self.gamma * next_q
+            # Acción seleccionada por la policy net
+            next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
+
+            # Evaluación con target net
+            next_q_values = self.target_net(next_states).gather(1, next_actions)
+
+            target_q = rewards + self.gamma * next_q_values * (1 - dones)
 
 
         loss = self.loss_fn(q_values, target_q)
+        q_reg = 1e-4 * q_values.pow(2).mean()
+        loss = loss + q_reg
 
         self.optimizer.zero_grad()
         loss.backward()
