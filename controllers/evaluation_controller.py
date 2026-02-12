@@ -24,11 +24,6 @@ class EvaluationController:
         self.max_steps: int = eval_cfg.get("max_steps_per_episode", 500)
         self.seed: int | None = eval_cfg.get("seed", None)
 
-        # Métricas
-        self.episode_rewards: List[float] = []
-        self.episode_lengths: List[int] = []
-        self.successes: List[int] = []
-
     # -------------------------------------------------
     # API pública
     # -------------------------------------------------
@@ -37,6 +32,7 @@ class EvaluationController:
         """
         Ejecuta evaluación del modelo guardado en checkpoint_path.
         """
+
         if self.seed is not None:
             np.random.seed(self.seed)
 
@@ -45,6 +41,10 @@ class EvaluationController:
 
         agent.set_mode(training=False)
         agent.load(checkpoint_path)
+
+        episode_rewards: List[float] = []
+        episode_lengths: List[int] = []
+        successes: List[int] = []
 
         for _ in range(self.num_episodes):
             state = env.reset()
@@ -64,20 +64,30 @@ class EvaluationController:
                     success = info.get("success", False)
                     break
 
-            self.episode_rewards.append(episode_reward)
-            self.episode_lengths.append(step + 1)
-            self.successes.append(1 if success else 0)
+            episode_rewards.append(episode_reward)
+            episode_lengths.append(step + 1)
+            successes.append(1 if success else 0)
 
-        return self._build_evaluation_summary()
+        return self._build_evaluation_summary(
+            episode_rewards,
+            episode_lengths,
+            successes,
+        )
 
     # -------------------------------------------------
     # Helpers
     # -------------------------------------------------
 
-    def _build_evaluation_summary(self) -> Dict[str, Any]:
-        rewards = np.array(self.episode_rewards)
-        lengths = np.array(self.episode_lengths)
-        successes = np.array(self.successes)
+    def _build_evaluation_summary(
+        self,
+        rewards: List[float],
+        lengths: List[int],
+        successes: List[int],
+    ) -> Dict[str, Any]:
+
+        rewards = np.array(rewards)
+        lengths = np.array(lengths)
+        successes = np.array(successes)
 
         return {
             "episodes": int(self.num_episodes),

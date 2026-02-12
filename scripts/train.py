@@ -22,7 +22,8 @@ def load_config(path: str) -> dict:
 # Builders
 # -------------------------------------------------
 def build_environment(config: dict):
-    return MazeEnvironment(config=config)
+    env_config = config["environment"]
+    return MazeEnvironment(config=env_config)
 
 
 def build_agent(config: dict, env):
@@ -54,13 +55,7 @@ def run_experiment(config: dict, seed: int, experiment_id: str):
     set_global_seed(seed)
 
     env = build_environment(config)
-    print(env.state_dim)
     agent = build_agent(config, env)
-
-    print("\n--- TRAIN DEBUG ---")
-    print("State dim :", env.state_dim)
-    print("Action dim:", env.action_space_n)
-
 
     controller = TrainingController(
         env=env,

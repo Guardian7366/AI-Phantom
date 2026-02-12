@@ -3,13 +3,12 @@ import yaml
 
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
-from controllers.inference_controller import InferenceController
 from agents.dqn.replay_buffer import ReplayBuffer
-
+from controllers.inference_controller import InferenceController
 
 
 # -------------------------------------------------
-# Factories
+# Config
 # -------------------------------------------------
 
 def load_config(path: str) -> dict:
@@ -17,24 +16,35 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def make_environment(cfg):
-    env_cfg = cfg["environment"]
-    return MazeEnvironment(config=env_cfg)
+# -------------------------------------------------
+# Builders (robustos y desacoplados)
+# -------------------------------------------------
+
+def build_environment(config: dict):
+    env_config = config["environment"]
+    return MazeEnvironment(config=env_config)
 
 
-def make_agent(cfg: dict, env):
-    agent_cfg = cfg["agent"]
+def build_agent(config: dict, env):
+    agent_cfg = config.get("agent", {})
 
-    dummy_buffer = ReplayBuffer(capacity=1)
+    # 🔹 En inferencia no necesitamos replay buffer real
+    # Si existe replay_buffer_size (por compatibilidad con train), usarlo.
+    buffer_capacity = agent_cfg.get("replay_buffer_size", 1)
 
-    return DQNAgent(
+    replay_buffer = ReplayBuffer(capacity=buffer_capacity)
+
+    agent = DQNAgent(
         state_dim=env.state_dim,
         action_dim=env.action_space_n,
-        replay_buffer=dummy_buffer,
-        **agent_cfg
+        replay_buffer=replay_buffer,
+        gamma=agent_cfg.get("gamma", 0.99),
+        lr=agent_cfg.get("learning_rate", 1e-3),
+        batch_size=agent_cfg.get("batch_size", 64),
+        target_update_freq=agent_cfg.get("target_update_frequency", 1000),
     )
 
-
+    return agent
 
 
 # -------------------------------------------------
@@ -65,47 +75,40 @@ def main():
     args = parser.parse_args()
 
     # ----------------------------
-    # Configuración
+    # Load config
     # ----------------------------
 
     cfg = load_config(args.config)
 
-    env = make_environment(cfg)
+    env = build_environment(cfg)
+    agent = build_agent(cfg, env)
 
-    agent = make_agent(
-        cfg,
-        env
-    )
-
-    controller_cfg = cfg.get("inference", {})
+    inference_cfg = cfg.get("inference", {})
 
     num_episodes = (
         args.episodes
         if args.episodes is not None
-        else controller_cfg.get("num_episodes", 10)
+        else inference_cfg.get("num_episodes", 10)
     )
 
-    max_steps = controller_cfg.get("max_steps_per_episode", 500)
+    max_steps = inference_cfg.get("max_steps_per_episode", 500)
 
-    # ----------------------------
-    # Inferencia
-    # ----------------------------
+    # 🔹 Compatibilidad con tu YAML actual (model.path)
+    model_path = None
+    if "model" in cfg:
+        model_path = cfg["model"].get("path")
 
     controller = InferenceController(
         env=env,
         agent=agent,
-        model_path=controller_cfg.get("model_path"),  # puede ser None
+        model_path=model_path,
         num_episodes=num_episodes,
         max_steps_per_episode=max_steps,
         render=args.render,
-        render_delay=controller_cfg.get("render_delay", 0.0),
+        render_delay=inference_cfg.get("render_delay", 0.0),
     )
 
     results = controller.run()
-
-    # ----------------------------
-    # Output
-    # ----------------------------
 
     print("\n=== INFERENCE SUMMARY ===")
     print(f"Model path     : {results['model_path']}")

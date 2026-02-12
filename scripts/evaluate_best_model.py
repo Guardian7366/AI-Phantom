@@ -1,3 +1,6 @@
+# scripts/evaluate_best_model.py
+# Evaluación cuantitativa del modelo global seleccionado
+
 import yaml
 import json
 from pathlib import Path
@@ -27,36 +30,43 @@ def main():
     config_path = "configs/maze_evaluation.yaml"
     cfg = load_config(config_path)
 
-    # ----------------------------
-    # Environment factory
-    # ----------------------------
+    # -------------------------------------------------
+    # Ruta oficial del best model
+    # -------------------------------------------------
+
+    model_path = Path("results") / "best_model" / "best_model.pth"
+
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"No se encontró best_model.pth en {model_path}"
+        )
+
+    # -------------------------------------------------
+    # Factories
+    # -------------------------------------------------
 
     def env_factory():
         return MazeEnvironment(cfg)
 
-    # ----------------------------
-    # Agent factory
-    # ----------------------------
-
     def agent_factory():
-        replay_buffer = ReplayBuffer(capacity=1)  # dummy buffer
+        temp_env = MazeEnvironment(cfg)
 
+        replay_buffer = ReplayBuffer(capacity=1)
+
+        # 🔒 NO dependemos de cfg["agent"]
+        # Solo usamos dimensiones reales del entorno
         agent = DQNAgent(
-            state_dim=6,
-            action_dim=4,
+            state_dim=temp_env.state_dim,
+            action_dim=temp_env.action_space_n,
             replay_buffer=replay_buffer,
-            gamma=cfg["agent"]["gamma"],
-            lr=cfg["agent"]["learning_rate"],
-            batch_size=cfg["agent"]["batch_size"],
-            target_update_freq=cfg["agent"]["target_update_frequency"],
         )
 
         agent.set_mode(training=False)
         return agent
 
-    # ----------------------------
-    # Evaluation
-    # ----------------------------
+    # -------------------------------------------------
+    # Evaluación
+    # -------------------------------------------------
 
     evaluator = EvaluationController(
         env_factory=env_factory,
@@ -64,19 +74,23 @@ def main():
         config=cfg,
     )
 
-    model_path = cfg["model"]["path"]
+    results = evaluator.evaluate_checkpoint(str(model_path))
 
-    results = evaluator.evaluate_checkpoint(model_path)
+    # -------------------------------------------------
+    # Output en consola
+    # -------------------------------------------------
 
-    # ----------------------------
-    # Output
-    # ----------------------------
-
-    print("=== RESULTADOS ===")
+    print("=== RESULTADOS ===\n")
     for k, v in results.items():
         print(f"{k:20s}: {v}")
 
+    # -------------------------------------------------
+    # Guardar resultados
+    # -------------------------------------------------
+
     output_path = Path("results") / "best_model" / "evaluation_summary.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2)
 
