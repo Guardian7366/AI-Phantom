@@ -19,6 +19,8 @@ environment:
     - [0,1,0,1,0,0,0,0]
     - [0,0,0,0,1,1,0,0]
 
+  randomize_grid: true
+  wall_probability: 0.25
   random_start_goal: true
   max_steps: 400
 
