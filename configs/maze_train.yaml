@@ -32,7 +32,7 @@ training:
 
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_episodes: 2000
+  epsilon_decay_episodes: 400
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs

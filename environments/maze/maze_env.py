@@ -76,6 +76,7 @@ class MazeEnvironment:
     # -------------------------------------------------
 
     def reset(self) -> np.ndarray:
+        self.prev_action = None
         if self.random_start_goal:
             self.start = self._sample_free_cell()
             self.goal = self._sample_free_cell()
@@ -89,6 +90,13 @@ class MazeEnvironment:
     # -------------------------------------------------
 
     def step(self, action: int):
+        reverse_actions = {
+                0: 2,
+                2: 0,
+                1: 3,
+                3: 1,
+                }
+        
         self.steps += 1
 
         dx, dy = self.ACTIONS[action]
@@ -103,19 +111,31 @@ class MazeEnvironment:
 
         if self._is_wall(nx, ny):
             reward -= 0.1
+            # Penalización por reversa inmediata (anti-loop)
+            if self.prev_action is not None:
+                if action == reverse_actions[self.prev_action]:
+                    reward -= 0.05
         else:
             self.agent_pos = [nx, ny]
 
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
-        # -------------------------
-        # Reward shaping CORRECTO
-        # -------------------------
-        # Solo recompensa si se acerca
-        if new_dist < old_dist:
-            reward += 0.05
-        elif new_dist > old_dist:
-            reward -= 0.02
+        # -------------------------------------------------
+        # Potential-based reward shaping NORMALIZADO
+        # -------------------------------------------------
+
+        gamma = 0.99
+
+        max_possible_dist = self.height + self.width
+
+        old_potential = -old_dist / max_possible_dist
+        new_potential = -new_dist / max_possible_dist
+
+        shaping = gamma * new_potential - old_potential
+
+        reward += shaping
+
+        # -------------------------------------------------
 
         if tuple(self.agent_pos) == self.goal:
             reward = 1.0
@@ -124,8 +144,11 @@ class MazeEnvironment:
 
         if self.steps >= self.max_steps:
             done = True
-
+            
+        self.prev_action = action
         return self._get_state(), reward, done, info
+
+
 
 
     # -------------------------------------------------
@@ -140,6 +163,8 @@ class MazeEnvironment:
                 ay / self.width,
                 (gx - ax) / self.height,
                 (gy - ay) / self.width,
+
+                # Sensores completos
                 float(self._is_wall(ax - 1, ay)),  # up
                 float(self._is_wall(ax + 1, ay)),  # down
                 float(self._is_wall(ax, ay - 1)),  # left
@@ -147,6 +172,7 @@ class MazeEnvironment:
             ],
             dtype=np.float32,
         )
+
 
     # -------------------------------------------------
 

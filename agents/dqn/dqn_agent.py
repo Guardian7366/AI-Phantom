@@ -51,7 +51,7 @@ class DQNAgent:
             target_update_freq=target_update_freq,
             device=device,
         )
-
+        self.tau = 0.005
         self.min_replay_size = min_replay_size
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -70,7 +70,7 @@ class DQNAgent:
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = nn.SmoothL1Loss()
 
         self.training = True
         self.update_step = 0
@@ -178,11 +178,18 @@ class DQNAgent:
 
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)   
         self.optimizer.step()
 
         self.update_step += 1
-        if self.update_step % self.target_update_freq == 0:
-            self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+        for target_param, policy_param in zip(
+            self.target_net.parameters(),
+            self.policy_net.parameters(),
+        ):
+            target_param.data.copy_(
+                self.tau * policy_param.data + (1.0 - self.tau) * target_param.data
+            )
 
         return loss.item()
 
