@@ -1,0 +1,26 @@
+[
+  {
+    "experiment_id": "maze_dqn_v2_seed42",
+    "score": 0.3,
+    "eval_success": 0.3,
+    "mean_reward": -228.04,
+    "mean_length": 281.47,
+    "penalties": []
+  },
+  {
+    "experiment_id": "maze_dqn_v2_seed123",
+    "score": 0.24,
+    "eval_success": 0.24,
+    "mean_reward": -256.42,
+    "mean_length": 305.76,
+    "penalties": []
+  },
+  {
+    "experiment_id": "maze_dqn_v2_seed999",
+    "score": 0.15,
+    "eval_success": 0.15,
+    "mean_reward": -221.49,
+    "mean_length": 340.72,
+    "penalties": []
+  }
+]
