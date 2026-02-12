@@ -2,7 +2,7 @@ environment:
   generator:
     width: 7
     height: 7
-    seed: 42
+    seed: null
     loop_probability: 0.05
 
   max_steps: 100

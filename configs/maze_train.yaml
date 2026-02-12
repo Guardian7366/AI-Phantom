@@ -22,7 +22,7 @@ environment:
 # Training
 # -----------------------------------------
 training:
-  num_episodes: 800
+  num_episodes: 2000
   max_steps_per_episode: 500
 
   epsilon_start: 1.0

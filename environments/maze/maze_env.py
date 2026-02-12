@@ -11,19 +11,16 @@ class MazeEnvironment:
     Ahora soporta:
     - Maze predefinido (grid en YAML)
     - Maze procedural (DFS generator + seed)
-
-    Diseño robusto para entrenamiento RL.
     """
 
     ACTIONS = {
-        0: (-1, 0),  # up
-        1: (0, 1),   # right
-        2: (1, 0),   # down
-        3: (0, -1),  # left
+        0: (-1, 0),  # up (row - 1)
+        1: (0, 1),   # right (col + 1)
+        2: (1, 0),   # down (row + 1)
+        3: (0, -1),  # left (col - 1)
     }
 
     def __init__(self, config: dict):
-
         self.config = config
 
         if "environment" in config:
@@ -35,72 +32,62 @@ class MazeEnvironment:
         # Procedural Maze Mode
         # -------------------------------------------------
         if "generator" in env_cfg:
+            self.gen_cfg = env_cfg["generator"]
 
-            gen_cfg = env_cfg["generator"]
+            self.width = self.gen_cfg.get("width", 7)
+            self.height = self.gen_cfg.get("height", 7)
+            self.start = tuple(self.gen_cfg.get("start", (1, 1)))
+            self.goal = tuple(self.gen_cfg.get("goal", (self.height - 2, self.width - 2)))
 
-            width = gen_cfg.get("width", 7)
-            height = gen_cfg.get("height", 7)
-            seed = gen_cfg.get("seed", None)
-            loop_prob = gen_cfg.get("loop_probability", 0.05)
+            self.loop_prob = self.gen_cfg.get("loop_probability", 0.05)
+            self.seed = self.gen_cfg.get("seed", None)
 
-            self.grid = generate_dfs_maze(
-                width=width,
-                height=height,
-                seed=seed,
-                loop_probability=loop_prob
-            )
-
-            self.start = tuple(gen_cfg.get("start", (1, 1)))
-            self.goal = tuple(gen_cfg.get("goal", (height - 2, width - 2)))
+            # Generar primer maze
+            self._generate_maze()
 
         # -------------------------------------------------
         # Static Maze Mode (Backward Compatibility)
         # -------------------------------------------------
         else:
-
             required_keys = ["grid", "start", "goal"]
             for key in required_keys:
                 if key not in env_cfg:
-                    raise KeyError(
-                        f"MazeEnvironment: falta clave '{key}' en config"
-                    )
+                    raise KeyError(f"MazeEnvironment: falta clave '{key}' en config")
 
             self.grid = np.array(env_cfg["grid"])
             self.start = tuple(env_cfg["start"])
             self.goal = tuple(env_cfg["goal"])
 
+            self.height, self.width = self.grid.shape
+
         # -------------------------------------------------
-
-        self.height, self.width = self.grid.shape
-
         self.state_dim = 6
         self.action_space_n = 4
-
         self.observation_space = self.state_dim
         self.action_space = self.action_space_n
 
         self.max_steps = env_cfg.get("max_steps", 500)
-
         self.agent_pos = None
         self.steps = 0
 
-        self.factory: Callable[[], "MazeEnvironment"] = (
-            lambda: MazeEnvironment(self.config)
-        )
+        # Factory para evaluaciones / entrenamiento
+        self.factory: Callable[[], "MazeEnvironment"] = lambda: MazeEnvironment(self.config)
 
     # -------------------------------------------------
     # Core API
     # -------------------------------------------------
 
     def reset(self) -> np.ndarray:
+        # 🔑 Generar nuevo maze si es procedural
+        if hasattr(self, "gen_cfg"):
+            self._generate_maze()
+
         self.agent_pos = list(self.start)
         self.steps = 0
         return self._get_state()
 
     def step(self, action: int):
-
         self.steps += 1
-
         dx, dy = self.ACTIONS[action]
         nx = self.agent_pos[0] + dx
         ny = self.agent_pos[1] + dy
@@ -128,26 +115,30 @@ class MazeEnvironment:
     # Helpers
     # -------------------------------------------------
 
-    def _get_state(self) -> np.ndarray:
+    def _generate_maze(self):
+        """Genera un nuevo laberinto procedural."""
+        self.grid = generate_dfs_maze(
+            width=self.width,
+            height=self.height,
+            seed=self.seed,  # puede ser None para aleatorio
+            loop_probability=self.loop_prob
+        )
+        self.height, self.width = self.grid.shape
 
+    def _get_state(self) -> np.ndarray:
         ax, ay = self.agent_pos
         gx, gy = self.goal
 
-        return np.array(
-            [
-                ax / self.height,
-                ay / self.width,
-                (gx - ax) / self.height,
-                (gy - ay) / self.width,
-                float(self._is_wall(ax - 1, ay)),
-                float(self._is_wall(ax + 1, ay)),
-            ],
-            dtype=np.float32,
-        )
+        return np.array([
+            ax / self.height,
+            ay / self.width,
+            (gx - ax) / self.height,
+            (gy - ay) / self.width,
+            float(self._is_wall(ax - 1, ay)),
+            float(self._is_wall(ax + 1, ay)),
+        ], dtype=np.float32)
 
     def _is_wall(self, x: int, y: int) -> bool:
-
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
             return True
-
         return self.grid[x, y] == 1
