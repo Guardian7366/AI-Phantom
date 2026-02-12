@@ -418,16 +418,16 @@
   },
   "evaluation": {
     "episodes": 100,
-    "success_rate": 1.0,
-    "mean_reward": 0.9300000000000002,
-    "mean_length": 8.0,
-    "reward_std": 2.220446049250313e-16,
+    "success_rate": 0.0,
+    "mean_reward": -4.999999999999937,
+    "mean_length": 500.0,
+    "reward_std": 8.881784197001252e-16,
     "length_std": 0.0,
-    "reward_p25": 0.9299999999999999,
-    "reward_p50": 0.9299999999999999,
-    "reward_p75": 0.9299999999999999,
-    "length_p25": 8.0,
-    "length_p50": 8.0,
-    "length_p75": 8.0
+    "reward_p25": -4.999999999999938,
+    "reward_p50": -4.999999999999938,
+    "reward_p75": -4.999999999999938,
+    "length_p25": 500.0,
+    "length_p50": 500.0,
+    "length_p75": 500.0
   }
 }

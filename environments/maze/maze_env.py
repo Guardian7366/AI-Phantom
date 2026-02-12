@@ -1,13 +1,18 @@
 from typing import Callable
 import numpy as np
 
+from .maze_generator import generate_dfs_maze
+
 
 class MazeEnvironment:
     """
     Entorno de laberinto compatible con DQN.
-    Acepta:
-    - config completo (con clave 'environment')
-    - o config directo del entorno
+
+    Ahora soporta:
+    - Maze predefinido (grid en YAML)
+    - Maze procedural (DFS generator + seed)
+
+    Diseño robusto para entrenamiento RL.
     """
 
     ACTIONS = {
@@ -18,39 +23,59 @@ class MazeEnvironment:
     }
 
     def __init__(self, config: dict):
-        # Guardar config completo (para factory / evaluación)
+
         self.config = config
 
-        # 🔑 Extraer subconfig del entorno de forma segura
         if "environment" in config:
             env_cfg = config["environment"]
         else:
             env_cfg = config
 
-        # ---------------------
-        # Validaciones claras
-        # ---------------------
-        required_keys = ["grid", "start", "goal"]
-        for key in required_keys:
-            if key not in env_cfg:
-                raise KeyError(
-                    f"MazeEnvironment: falta clave '{key}' en config['environment']"
-                )
+        # -------------------------------------------------
+        # Procedural Maze Mode
+        # -------------------------------------------------
+        if "generator" in env_cfg:
 
-        # ---------------------
-        # Cargar entorno
-        # ---------------------
-        self.grid = np.array(env_cfg["grid"])
-        self.start = tuple(env_cfg["start"])
-        self.goal = tuple(env_cfg["goal"])
+            gen_cfg = env_cfg["generator"]
+
+            width = gen_cfg.get("width", 7)
+            height = gen_cfg.get("height", 7)
+            seed = gen_cfg.get("seed", None)
+            loop_prob = gen_cfg.get("loop_probability", 0.05)
+
+            self.grid = generate_dfs_maze(
+                width=width,
+                height=height,
+                seed=seed,
+                loop_probability=loop_prob
+            )
+
+            self.start = tuple(gen_cfg.get("start", (1, 1)))
+            self.goal = tuple(gen_cfg.get("goal", (height - 2, width - 2)))
+
+        # -------------------------------------------------
+        # Static Maze Mode (Backward Compatibility)
+        # -------------------------------------------------
+        else:
+
+            required_keys = ["grid", "start", "goal"]
+            for key in required_keys:
+                if key not in env_cfg:
+                    raise KeyError(
+                        f"MazeEnvironment: falta clave '{key}' en config"
+                    )
+
+            self.grid = np.array(env_cfg["grid"])
+            self.start = tuple(env_cfg["start"])
+            self.goal = tuple(env_cfg["goal"])
+
+        # -------------------------------------------------
 
         self.height, self.width = self.grid.shape
 
-        # Dimensiones (núcleo)
         self.state_dim = 6
         self.action_space_n = 4
 
-        # 👉 Compatibilidad tipo Gym (CLAVE)
         self.observation_space = self.state_dim
         self.action_space = self.action_space_n
 
@@ -59,14 +84,13 @@ class MazeEnvironment:
         self.agent_pos = None
         self.steps = 0
 
-        # Factory (clave para evaluación y smoke tests)
         self.factory: Callable[[], "MazeEnvironment"] = (
             lambda: MazeEnvironment(self.config)
         )
 
-    # ---------------------
+    # -------------------------------------------------
     # Core API
-    # ---------------------
+    # -------------------------------------------------
 
     def reset(self) -> np.ndarray:
         self.agent_pos = list(self.start)
@@ -74,6 +98,7 @@ class MazeEnvironment:
         return self._get_state()
 
     def step(self, action: int):
+
         self.steps += 1
 
         dx, dy = self.ACTIONS[action]
@@ -99,11 +124,12 @@ class MazeEnvironment:
 
         return self._get_state(), reward, done, info
 
-    # ---------------------
+    # -------------------------------------------------
     # Helpers
-    # ---------------------
+    # -------------------------------------------------
 
     def _get_state(self) -> np.ndarray:
+
         ax, ay = self.agent_pos
         gx, gy = self.goal
 
@@ -120,7 +146,8 @@ class MazeEnvironment:
         )
 
     def _is_wall(self, x: int, y: int) -> bool:
+
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
             return True
-        return self.grid[x, y] == 1
 
+        return self.grid[x, y] == 1

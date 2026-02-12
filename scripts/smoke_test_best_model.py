@@ -74,6 +74,10 @@ def main():
         # 🔑 Replay buffer dummy (inferencia)
         replay_buffer = ReplayBuffer(capacity=1)
 
+        print("\n--- SMOKE DEBUG ---")
+        print("State dim :", env.state_dim)
+        print("Action dim:", env.action_space_n)
+
         agent = DQNAgent(
             state_dim=env.state_dim,
             action_dim=env.action_space_n,
@@ -113,6 +117,9 @@ def main():
     # ----------------------------
 
     try:
+        print("\n--- AFTER LOAD DEBUG ---")
+        print(agent.policy_net)
+
         results = controller.run()
         success("Inference executed")
     except Exception as e:

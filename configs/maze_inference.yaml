@@ -1,20 +1,13 @@
 environment:
-  grid:
-    - [0, 0, 0, 0, 0]
-    - [0, 1, 1, 1, 0]
-    - [0, 0, 0, 1, 0]
-    - [1, 1, 0, 0, 0]
-    - [0, 0, 0, 1, 0]
-
-  start: [0, 0]
-  goal: [4, 4]
+  generator:
+    width: 7
+    height: 7
+    seed: 42
+    loop_probability: 0.05
 
   max_steps: 100
-  render: false
 
-agent:
-  type: dqn
-  epsilon: 0.0   # greedy puro
+agent: {}
 
 model:
   path: results/best_model/best_model.pth
