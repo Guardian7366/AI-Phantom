@@ -4,6 +4,8 @@ import yaml
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
 from controllers.inference_controller import InferenceController
+from agents.dqn.replay_buffer import ReplayBuffer
+
 
 
 # -------------------------------------------------
@@ -15,18 +17,24 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def make_environment(cfg: dict):
+def make_environment(cfg):
     env_cfg = cfg["environment"]
-    return MazeEnvironment(**env_cfg)
+    return MazeEnvironment(config=env_cfg)
 
 
-def make_agent(cfg: dict, state_dim: int, action_dim: int):
+def make_agent(cfg: dict, env):
     agent_cfg = cfg["agent"]
+
+    dummy_buffer = ReplayBuffer(capacity=1)
+
     return DQNAgent(
-        state_dim=state_dim,
-        action_dim=action_dim,
+        state_dim=env.state_dim,
+        action_dim=env.action_space_n,
+        replay_buffer=dummy_buffer,
         **agent_cfg
     )
+
+
 
 
 # -------------------------------------------------
@@ -66,8 +74,7 @@ def main():
 
     agent = make_agent(
         cfg,
-        state_dim=env.state_dim,
-        action_dim=env.action_dim
+        env
     )
 
     controller_cfg = cfg.get("inference", {})
