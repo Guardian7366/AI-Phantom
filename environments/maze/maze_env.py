@@ -11,10 +11,10 @@ class MazeEnvironment:
     """
 
     ACTIONS = {
-        0: (-1, 0),  # up (row - 1)
-        1: (0, 1),   # right (col + 1)
-        2: (1, 0),   # down (row + 1)
-        3: (0, -1),  # left (col - 1)
+        0: (-1, 0),  # up
+        1: (0, 1),   # right
+        2: (1, 0),   # down
+        3: (0, -1),  # left
     }
 
     def __init__(self, config: dict):
@@ -37,6 +37,7 @@ class MazeEnvironment:
         # Dimensiones núcleo
         self.state_dim = 6
         self.action_space_n = 4
+
         self.observation_space = self.state_dim
         self.action_space = self.action_space_n
 
@@ -91,16 +92,13 @@ class MazeEnvironment:
     # -------------------------------------------------
 
     def reset(self) -> np.ndarray:
-        # 🔑 Generar nuevo maze si es procedural
-        if hasattr(self, "gen_cfg"):
-            self._generate_maze()
-
         self.agent_pos = list(self.start)
         self.steps = 0
         return self._get_state()
 
     def step(self, action: int):
         self.steps += 1
+
         dx, dy = self.ACTIONS[action]
         nx = self.agent_pos[0] + dx
         ny = self.agent_pos[1] + dy
@@ -132,14 +130,17 @@ class MazeEnvironment:
         ax, ay = self.agent_pos
         gx, gy = self.goal
 
-        return np.array([
-            ax / self.height,
-            ay / self.width,
-            (gx - ax) / self.height,
-            (gy - ay) / self.width,
-            float(self._is_wall(ax - 1, ay)),
-            float(self._is_wall(ax + 1, ay)),
-        ], dtype=np.float32)
+        return np.array(
+            [
+                ax / self.height,
+                ay / self.width,
+                (gx - ax) / self.height,
+                (gy - ay) / self.width,
+                float(self._is_wall(ax - 1, ay)),
+                float(self._is_wall(ax + 1, ay)),
+            ],
+            dtype=np.float32,
+        )
 
     def _is_wall(self, x: int, y: int) -> bool:
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
