@@ -1,9 +1,9 @@
 {
-  "experiment_id": "maze_dqn_v2_seed42",
-  "score": 0.3,
-  "eval_success": 0.3,
-  "mean_reward": -228.04,
-  "mean_length": 281.47,
+  "experiment_id": "maze_dqn_v2_seed123",
+  "score": 0.39,
+  "eval_success": 0.39,
+  "mean_reward": -230.38,
+  "mean_length": 246.09,
   "penalties": [],
   "source_checkpoint": "results/checkpoints\\best_model.pth"
 }

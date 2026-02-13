@@ -1,14 +1,14 @@
 {
   "episodes": 200,
-  "success_rate": 0.115,
-  "mean_reward": -223.3336625,
-  "mean_length": 354.455,
-  "reward_std": 247.26301650198377,
-  "length_std": 126.34875533617259,
-  "reward_p25": -367.34843749999993,
-  "reward_p50": -86.29124999999979,
-  "reward_p75": -42.025781250000165,
-  "length_p25": 400.0,
+  "success_rate": 0.365,
+  "mean_reward": -128.422059375,
+  "mean_length": 256.16,
+  "reward_std": 216.14524699443277,
+  "length_std": 189.73342984303002,
+  "reward_p25": -43.34515625000013,
+  "reward_p50": -42.25000000000029,
+  "reward_p75": 1.0375,
+  "length_p25": 7.75,
   "length_p50": 400.0,
   "length_p75": 400.0
 }

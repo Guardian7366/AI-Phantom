@@ -1,26 +1,26 @@
 [
   {
-    "experiment_id": "maze_dqn_v2_seed42",
-    "score": 0.3,
-    "eval_success": 0.3,
-    "mean_reward": -228.04,
-    "mean_length": 281.47,
-    "penalties": []
-  },
-  {
     "experiment_id": "maze_dqn_v2_seed123",
-    "score": 0.24,
-    "eval_success": 0.24,
-    "mean_reward": -256.42,
-    "mean_length": 305.76,
+    "score": 0.39,
+    "eval_success": 0.39,
+    "mean_reward": -230.38,
+    "mean_length": 246.09,
     "penalties": []
   },
   {
     "experiment_id": "maze_dqn_v2_seed999",
-    "score": 0.15,
-    "eval_success": 0.15,
-    "mean_reward": -221.49,
-    "mean_length": 340.72,
+    "score": 0.36,
+    "eval_success": 0.36,
+    "mean_reward": -202.12,
+    "mean_length": 258.15,
+    "penalties": []
+  },
+  {
+    "experiment_id": "maze_dqn_v2_seed42",
+    "score": 0.35,
+    "eval_success": 0.35,
+    "mean_reward": -209.86,
+    "mean_length": 262.33,
     "penalties": []
   }
 ]
