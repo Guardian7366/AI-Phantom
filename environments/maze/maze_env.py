@@ -5,11 +5,8 @@ import random
 
 class MazeEnvironment:
     """
-    Maze Environment v4.0
-    - Memory augmented state
-    - Anti-loop revisitation penalty
-    - Potential based reward shaping
-    - Backward compatible API
+    Maze Environment v5.0
+    CNN-ready state representation (C, H, W)
     """
 
     ACTIONS = {
@@ -19,57 +16,39 @@ class MazeEnvironment:
         3: (0, -1),  # left
     }
 
-    # =====================================================
-    # INIT
-    # =====================================================
-
     def __init__(self, config: dict):
         self.config = config
 
-        if "environment" in config:
-            env_cfg = config["environment"]
-        else:
-            env_cfg = config
-
-        if "grid" not in env_cfg:
+        if "grid" not in config:
             raise KeyError("MazeEnvironment requiere 'grid' base")
 
-        self.base_grid = np.array(env_cfg["grid"])
+        self.base_grid = np.array(config["grid"], dtype=np.int32)
         self.height, self.width = self.base_grid.shape
 
-        self.random_start_goal = env_cfg.get("random_start_goal", False)
-        self.randomize_grid = env_cfg.get("randomize_grid", False)
-        self.wall_probability = env_cfg.get("wall_probability", 0.25)
-        self.max_steps = env_cfg.get("max_steps", 500)
+        self.random_start_goal = config.get("random_start_goal", False)
+        self.randomize_grid = config.get("randomize_grid", False)
+        self.wall_probability = config.get("wall_probability", 0.25)
+        self.max_steps = config.get("max_steps", 500)
 
-        # =====================================================
-        # STATE DIMENSION (CRÍTICO)
-        # 8 base + 8 prev_state + 4 prev_action = 20
-        # =====================================================
-        self.base_state_dim = 8
-        self.state_dim = 20
+        # CNN state shape
+        self.channels = 4
+        self.state_shape = (self.channels, self.height, self.width)
+        self.state_dim = self.state_shape  # importante para el agent
+
         self.action_space_n = 4
-
-        self.observation_space = self.state_dim
         self.action_space = self.action_space_n
-
-        # Runtime variables
-        self.agent_pos = None
-        self.goal = None
-        self.prev_state = None
-        self.prev_action = None
-        self.steps = 0
+        self.observation_space = self.state_shape
 
         self.factory: Callable[[], "MazeEnvironment"] = (
             lambda: MazeEnvironment(self.config)
         )
 
-    # =====================================================
-    # GRID GENERATION
-    # =====================================================
+    # --------------------------------------------------
+    # Grid
+    # --------------------------------------------------
 
     def _generate_random_grid(self):
-        grid = np.zeros((self.height, self.width), dtype=int)
+        grid = np.zeros((self.height, self.width), dtype=np.int32)
         for i in range(self.height):
             for j in range(self.width):
                 if random.random() < self.wall_probability:
@@ -83,14 +62,12 @@ class MazeEnvironment:
             if self.grid[x, y] == 0:
                 return (x, y)
 
-    # =====================================================
-    # RESET
-    # =====================================================
+    # --------------------------------------------------
+    # Reset
+    # --------------------------------------------------
 
     def reset(self):
         self.steps = 0
-        self.prev_state = None
-        self.prev_action = None
 
         if self.randomize_grid:
             self.grid = self._generate_random_grid()
@@ -108,20 +85,17 @@ class MazeEnvironment:
 
         self.agent_pos = list(self.start)
 
-        self.visit_counts = np.zeros((self.height, self.width), dtype=np.int32)
+        self.visit_counts = np.zeros((self.height, self.width), dtype=np.float32)
         self.visit_counts[self.agent_pos[0], self.agent_pos[1]] += 1
 
         return self._get_state()
 
-    # =====================================================
-    # STEP
-    # =====================================================
+    # --------------------------------------------------
+    # Step
+    # --------------------------------------------------
 
     def step(self, action: int):
-        reverse_actions = {0: 2, 2: 0, 1: 3, 3: 1}
         self.steps += 1
-
-        old_state_base = self._get_base_state()
 
         dx, dy = self.ACTIONS[action]
         nx = self.agent_pos[0] + dx
@@ -135,9 +109,6 @@ class MazeEnvironment:
 
         if self._is_wall(nx, ny):
             reward -= 0.1
-            if self.prev_action is not None:
-                if action == reverse_actions[self.prev_action]:
-                    reward -= 0.05
         else:
             self.agent_pos = [nx, ny]
 
@@ -150,10 +121,10 @@ class MazeEnvironment:
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
         gamma = 0.99
-        max_possible_dist = self.height + self.width
+        max_dist = self.height + self.width
 
-        old_potential = -old_dist / max_possible_dist
-        new_potential = -new_dist / max_possible_dist
+        old_potential = -old_dist / max_dist
+        new_potential = -new_dist / max_dist
         reward += gamma * new_potential - old_potential
 
         if tuple(self.agent_pos) == self.goal:
@@ -164,66 +135,35 @@ class MazeEnvironment:
         if self.steps >= self.max_steps:
             done = True
 
-        # Guardar memoria
-        self.prev_state = old_state_base
-        self.prev_action = action
-
         return self._get_state(), reward, done, info
 
-    # =====================================================
-    # STATE CONSTRUCTION
-    # =====================================================
-
-    def _get_base_state(self):
-        ax, ay = self.agent_pos
-        gx, gy = self.goal
-
-        # Normalización espacial
-        ax /= self.height
-        ay /= self.width
-        gx /= self.height
-        gy /= self.width
-
-        wall_up = int(self._is_wall(self.agent_pos[0] - 1, self.agent_pos[1]))
-        wall_right = int(self._is_wall(self.agent_pos[0], self.agent_pos[1] + 1))
-        wall_down = int(self._is_wall(self.agent_pos[0] + 1, self.agent_pos[1]))
-        wall_left = int(self._is_wall(self.agent_pos[0], self.agent_pos[1] - 1))
-
-        return np.array([
-            ax, ay,
-            gx, gy,
-            wall_up,
-            wall_right,
-            wall_down,
-            wall_left
-        ], dtype=np.float32)
+    # --------------------------------------------------
+    # State
+    # --------------------------------------------------
 
     def _get_state(self):
-        current_state = self._get_base_state()
+        walls = self.grid.astype(np.float32)
 
-        if self.prev_state is None:
-            prev_state = np.zeros(self.base_state_dim, dtype=np.float32)
-        else:
-            prev_state = self.prev_state
+        agent_layer = np.zeros_like(walls)
+        agent_layer[self.agent_pos[0], self.agent_pos[1]] = 1.0
 
-        if self.prev_action is None:
-            prev_action = np.zeros(self.action_space, dtype=np.float32)
-        else:
-            prev_action = np.eye(self.action_space, dtype=np.float32)[self.prev_action]
+        goal_layer = np.zeros_like(walls)
+        goal_layer[self.goal[0], self.goal[1]] = 1.0
 
-        augmented_state = np.concatenate([
-            current_state,
-            prev_state,
-            prev_action
-        ])
+        visits = self.visit_counts.copy()
+        if visits.max() > 0:
+            visits = visits / visits.max()
 
-        return augmented_state
+        state = np.stack(
+            [walls, agent_layer, goal_layer, visits],
+            axis=0,
+        )
 
-    # =====================================================
-    # HELPERS
-    # =====================================================
+        return state.astype(np.float32)
 
-    def _is_wall(self, x: int, y: int):
+    # --------------------------------------------------
+
+    def _is_wall(self, x, y):
         if x < 0 or y < 0 or x >= self.height or y >= self.width:
             return True
         return self.grid[x, y] == 1

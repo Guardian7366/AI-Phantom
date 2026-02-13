@@ -196,6 +196,7 @@ class TrainingController:
 
         success_rate = float(np.mean(self.success_history))
 
+        # Mejora detectada
         if success_rate > self.best_success_rate:
             self.best_success_rate = success_rate
             self.no_improve_counter = 0
@@ -207,6 +208,7 @@ class TrainingController:
         else:
             self.no_improve_counter += 1
 
+        # Early stop por threshold absoluto
         if success_rate >= self.success_threshold:
             print(
                 f"[Early Stop] Success rate alcanzado: "
@@ -214,14 +216,17 @@ class TrainingController:
             )
             return True
 
-        if self.no_improve_counter >= self.early_stopping_patience:
-            print(
-                f"[Early Stop] Sin mejora durante "
-                f"{self.early_stopping_patience} ventanas"
-            )
-            return True
+        # Early stop por paciencia (solo si está activado)
+        if self.early_stopping_patience is not None:
+            if self.no_improve_counter >= self.early_stopping_patience:
+                print(
+                    f"[Early Stop] Sin mejora durante "
+                    f"{self.early_stopping_patience} ventanas"
+                )
+                return True
 
         return False
+
 
     # -------------------------------------------------
 

@@ -29,17 +29,17 @@ environment:
 # Training
 # -----------------------------------------
 training:
-  num_episodes: 3000
+  num_episodes: 10000
   max_steps_per_episode: 400
 
   epsilon_start: 1.0
-  epsilon_end: 0.1
+  epsilon_end: 0.02
   epsilon_decay_episodes: 2000
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
 
-  early_stopping_patience: 400
+  early_stopping_patience: null
   success_threshold: 0.85
   success_window: 200
 
