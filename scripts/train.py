@@ -41,10 +41,12 @@ def build_agent(config: dict, env):
         gamma=agent_cfg.get("gamma", 0.99),
         lr=agent_cfg.get("learning_rate", 1e-3),
         batch_size=agent_cfg.get("batch_size", 64),
+        min_replay_size=agent_cfg.get("min_replay_size", 1000),
         tau=agent_cfg.get("tau", 0.005),
     )
 
     return agent
+
 
 
 

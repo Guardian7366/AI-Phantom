@@ -19,10 +19,11 @@ environment:
     - [0,1,0,1,0,0,0,0]
     - [0,0,0,0,1,1,0,0]
 
-  randomize_grid: true
-  wall_probability: 0.25
-  random_start_goal: true
-  max_steps: 400
+  randomize_grid: false
+  random_start_goal: false
+  wall_probability: 0.0
+  max_steps: 200
+
 
 
 # -----------------------------------------
@@ -30,7 +31,7 @@ environment:
 # -----------------------------------------
 training:
   num_episodes: 2000
-  max_steps_per_episode: 400
+  max_steps_per_episode: 200
 
   epsilon_start: 1.0
   epsilon_end: 0.02

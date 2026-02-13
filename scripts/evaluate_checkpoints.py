@@ -34,19 +34,14 @@ def parse_args():
 # -------------------------------------------------
 
 def validate_checkpoint_compatibility(agent: DQNAgent, checkpoint_path: str) -> bool:
-    state_dict = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
 
-    weight_keys = [k for k in state_dict.keys() if k.endswith("weight")]
-    if not weight_keys:
+    try:
+        agent.policy_net.load_state_dict(state_dict, strict=True)
+        return True
+    except Exception:
         return False
 
-    first_w = state_dict[weight_keys[0]]
-    last_w = state_dict[weight_keys[-1]]
-
-    state_dim_ok = first_w.shape[1] == agent.state_dim
-    action_dim_ok = last_w.shape[0] == agent.action_dim
-
-    return state_dim_ok and action_dim_ok
 
 
 # -------------------------------------------------

@@ -129,6 +129,19 @@ class TrainingController:
             )
 
             self.epsilon_history.append(float(epsilon))
+            # -----------------------------
+            # Log por episodio
+            # -----------------------------
+            if episode % 10 == 0 or episode == 1:
+                print(
+                    f"[Seed {self.experiment_id}] "
+                    f"Ep {episode}/{self.num_episodes} | "
+                    f"Reward: {episode_reward:.3f} | "
+                    f"Len: {step+1} | "
+                    f"Success: {success_int} | "
+                    f"Rolling SR: {rolling_rate:.3f} | "
+                    f"Eps: {epsilon:.3f}"
+                )
 
             if self._check_and_handle_progress(episode):
                 break
