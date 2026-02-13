@@ -31,8 +31,10 @@ class CNN_Dueling_DQN(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             nn.Linear(conv_out_size, 256),
+            nn.LayerNorm(256),
             nn.ReLU(),
-        )
+        )   
+
 
         self.value_stream = nn.Sequential(
             nn.Linear(256, 128),
@@ -89,7 +91,6 @@ class DQNAgent:
         update_frequency=update_frequency,
         device=device,
     )
-
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.replay_buffer = replay_buffer
@@ -103,6 +104,14 @@ class DQNAgent:
 
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        # ------------------------------
+        # AMP GradScaler initialization
+        # ------------------------------
+        if self.device == "cuda":
+            self.scaler = torch.amp.GradScaler("cuda")
+        else:
+            self.scaler = None
 
         self.policy_net = CNN_Dueling_DQN(state_dim, action_dim).to(self.device)
         self.target_net = CNN_Dueling_DQN(state_dim, action_dim).to(self.device)
@@ -166,32 +175,29 @@ class DQNAgent:
         next_states = torch.from_numpy(next_states).to(self.device, non_blocking=True)
         dones = torch.from_numpy(dones).to(self.device, non_blocking=True).unsqueeze(1)
 
+
         # ------------------------------
         # Mixed Precision Training
         # ------------------------------
         use_amp = self.device == "cuda"
 
         if use_amp:
-            scaler = getattr(self, "scaler", None)
-            if scaler is None:
-                self.scaler = torch.cuda.amp.GradScaler()
-                scaler = self.scaler
-
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 q_values = self.policy_net(states).gather(1, actions)
 
                 with torch.no_grad():
                     next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
                     next_q = self.target_net(next_states).gather(1, next_actions)
                     target_q = rewards + self.gamma * next_q * (1 - dones)
+                    target_q = target_q.detach()
 
                 loss = self.loss_fn(q_values, target_q)
 
             self.optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
+            self.scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
-            scaler.step(self.optimizer)
-            scaler.update()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
         else:
             q_values = self.policy_net(states).gather(1, actions)
@@ -207,6 +213,7 @@ class DQNAgent:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.optimizer.step()
+
 
         # ------------------------------
         # Soft target update
