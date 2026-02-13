@@ -1,5 +1,6 @@
 import argparse
 import yaml
+import torch
 
 from controllers.training_controller import TrainingController
 from utils.seeding import set_global_seed
@@ -40,7 +41,7 @@ def build_agent(config: dict, env):
         gamma=agent_cfg.get("gamma", 0.99),
         lr=agent_cfg.get("learning_rate", 1e-3),
         batch_size=agent_cfg.get("batch_size", 64),
-        target_update_freq=agent_cfg.get("target_update_frequency", 1000),
+        tau=agent_cfg.get("tau", 0.005),
     )
 
     return agent
@@ -89,6 +90,14 @@ def main():
         help="Ruta al archivo de configuración YAML",
     )
     args = parser.parse_args()
+
+    # -----------------------------------
+    # CUDA Optimizations
+    # -----------------------------------
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     config = load_config(args.config)
 

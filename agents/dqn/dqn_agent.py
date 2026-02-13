@@ -57,6 +57,7 @@ class CNN_Dueling_DQN(nn.Module):
         return q
 
 
+
 # =====================================================
 # AGENT
 # =====================================================
@@ -71,20 +72,23 @@ class DQNAgent:
         gamma: float = 0.99,
         lr: float = 1e-4,
         batch_size: int = 64,
-        target_update_freq: int = 1000,
         min_replay_size: int = 1000,
+        tau: float = 0.005,
+        update_frequency: int = 4,
         device: Optional[str] = None
     ):
 
         self._init_params = dict(
-            state_dim=state_dim,
-            action_dim=action_dim,
-            gamma=gamma,
-            lr=lr,
-            batch_size=batch_size,
-            target_update_freq=target_update_freq,
-            device=device,
-        )
+        state_dim=state_dim,
+        action_dim=action_dim,
+        gamma=gamma,
+        lr=lr,
+        batch_size=batch_size,
+        min_replay_size=min_replay_size,
+        tau=tau,
+        update_frequency=update_frequency,
+        device=device,
+    )
 
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -92,8 +96,11 @@ class DQNAgent:
 
         self.gamma = gamma
         self.batch_size = batch_size
-        self.target_update_freq = target_update_freq
         self.min_replay_size = min_replay_size
+        self.tau = tau
+        self.update_frequency = update_frequency
+        self.step_counter = 0
+
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -106,7 +113,6 @@ class DQNAgent:
         self.loss_fn = nn.SmoothL1Loss()
 
         self.training = True
-        self.tau = 0.005
 
         self.factory: Callable[[], "DQNAgent"] = self._build_factory
 
@@ -125,9 +131,9 @@ class DQNAgent:
         if self.training and random.random() < epsilon:
             return random.randrange(self.action_dim)
 
-        state_tensor = torch.tensor(state, dtype=torch.float32)\
-            .unsqueeze(0)\
-            .to(self.device)
+        state_tensor = torch.as_tensor(
+            state, dtype=torch.float32, device=self.device
+        ).unsqueeze(0)
 
         with torch.no_grad():
             q_values = self.policy_net(state_tensor)
@@ -138,8 +144,12 @@ class DQNAgent:
         if not self.training:
             return
         self.replay_buffer.push(state, action, reward, next_state, done)
+        self.step_counter += 1
+
 
     def update(self):
+        if self.step_counter % self.update_frequency != 0:
+            return None
 
         if not self.training:
             return None
@@ -150,11 +160,11 @@ class DQNAgent:
         states, actions, rewards, next_states, dones = \
             self.replay_buffer.sample(self.batch_size)
 
-        states = torch.tensor(states, dtype=torch.float32).to(self.device)
-        actions = torch.tensor(actions).long().unsqueeze(1).to(self.device)
-        rewards = torch.tensor(rewards).unsqueeze(1).to(self.device)
-        next_states = torch.tensor(next_states, dtype=torch.float32).to(self.device)
-        dones = torch.tensor(dones).unsqueeze(1).to(self.device)
+        states = torch.from_numpy(states).to(self.device, non_blocking=True)
+        actions = torch.from_numpy(actions).long().to(self.device, non_blocking=True).unsqueeze(1)
+        rewards = torch.from_numpy(rewards).to(self.device, non_blocking=True).unsqueeze(1)
+        next_states = torch.from_numpy(next_states).to(self.device, non_blocking=True)
+        dones = torch.from_numpy(dones).to(self.device, non_blocking=True).unsqueeze(1)
 
         q_values = self.policy_net(states).gather(1, actions)
 
@@ -165,27 +175,28 @@ class DQNAgent:
 
         loss = self.loss_fn(q_values, target_q)
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
         self.optimizer.step()
 
+        # Soft target update optimizado
         for target_param, policy_param in zip(
             self.target_net.parameters(),
             self.policy_net.parameters()
         ):
-            target_param.data.copy_(
-                self.tau * policy_param.data +
-                (1.0 - self.tau) * target_param.data
-            )
+            target_param.data.mul_(1.0 - self.tau)
+            target_param.data.add_(self.tau * policy_param.data)
 
         return loss.item()
+   
 
     def save(self, path: str):
         torch.save(self.policy_net.state_dict(), path)
 
     def load(self, path: str):
         self.policy_net.load_state_dict(
-            torch.load(path, map_location=self.device)
+            torch.load(path, map_location=self.device, weights_only=True)
         )
         self.target_net.load_state_dict(self.policy_net.state_dict())
+

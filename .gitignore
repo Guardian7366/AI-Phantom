@@ -1,4 +1,9 @@
-venv/
-.venv/
-*.pyc
+# Entorno virtual
+venv311/
+
+# Python
 __pycache__/
+*.pyc
+
+# VSCode
+.vscode/

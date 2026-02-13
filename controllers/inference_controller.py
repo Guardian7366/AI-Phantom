@@ -2,7 +2,6 @@ import os
 import numpy as np
 from typing import Dict, Any, List, Optional
 
-
 DEFAULT_BEST_MODEL_PATH = os.path.join(
     "results", "best_model", "best_model.pth"
 )

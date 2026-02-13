@@ -5,7 +5,7 @@ import random
 
 class MazeEnvironment:
     """
-    Maze Environment v5.0
+    Maze Essnvironment v5.0
     CNN-ready state representation (C, H, W)
     """
 
