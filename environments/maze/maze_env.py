@@ -120,7 +120,7 @@ class MazeEnvironment:
 
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
-        gamma = 0.99
+        gamma = 0.9 # Modelo 2.4.3
         max_dist = self.height + self.width
 
         old_potential = -old_dist / max_dist

@@ -119,7 +119,7 @@ class DQNAgent:
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.loss_fn = nn.SmoothL1Loss()
+        self.loss_fn = nn.SmoothL1Loss(reduction='none')
 
         self.training = True
 
@@ -193,14 +193,16 @@ class DQNAgent:
                     target_q = rewards + self.gamma * next_q * (1 - dones)
                     target_q = target_q.detach()
 
-                loss = (weights * (q_values - target_q).pow(2)).mean()
+                td_error = q_values - target_q
+                loss = (weights * self.loss_fn(q_values, target_q)).mean()
+
 
             self.optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            td_errors = (q_values - target_q).detach().cpu().numpy()
+            td_errors = td_error.detach().cpu().numpy()
             self.replay_buffer.update_priorities(indices, td_errors)
 
 
@@ -212,13 +214,15 @@ class DQNAgent:
                 next_q = self.target_net(next_states).gather(1, next_actions)
                 target_q = rewards + self.gamma * next_q * (1 - dones)
 
-            loss = (weights * (q_values - target_q).pow(2)).mean()
+            td_error = q_values - target_q
+            loss = (weights * self.loss_fn(q_values, target_q)).mean()
+
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.optimizer.step()
-            td_errors = (q_values - target_q).detach().cpu().numpy()
+            td_errors = td_error.detach().cpu().numpy()
             self.replay_buffer.update_priorities(indices, td_errors)
 
 

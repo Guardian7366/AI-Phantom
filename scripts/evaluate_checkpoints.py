@@ -60,16 +60,28 @@ def main():
     checkpoint_dir = paths_cfg["checkpoint_dir"]
     results_path = paths_cfg["results_path"]
 
-    checkpoint_files = sorted(
-        f for f in os.listdir(checkpoint_dir) if f.endswith(".pth")
-    )
+    # -------------------------------------------------
+    # Buscar checkpoints dentro de subcarpetas
+    # -------------------------------------------------
+
+    checkpoint_files = []
+
+    for root, _, files in os.walk(checkpoint_dir):
+        for f in files:
+            if f.endswith(".pth"):
+                checkpoint_files.append(os.path.join(root, f))
+
+    checkpoint_files = sorted(checkpoint_files)
 
     if not checkpoint_files:
-        raise RuntimeError("No se encontraron checkpoints .pth")
+        raise RuntimeError(
+            f"No se encontraron checkpoints .pth en {checkpoint_dir}"
+        )
 
     all_results = []
 
-    for ckpt in checkpoint_files:
+    for ckpt_path in checkpoint_files:
+
 
         # -------------------------------------------------
         # Factories (DISEÑO CORRECTO)
@@ -96,8 +108,6 @@ def main():
             replay_buffer=PrioritizedReplayBuffer(capacity=1),
         )
 
-        ckpt_path = os.path.join(checkpoint_dir, ckpt)
-
         if not validate_checkpoint_compatibility(temp_agent, ckpt_path):
             print(f"[SKIP] Checkpoint incompatible: {ckpt}")
             continue
@@ -113,7 +123,7 @@ def main():
         )
 
         summary = evaluator.evaluate_checkpoint(ckpt_path)
-        summary["model"] = ckpt
+        summary["model"] = os.path.relpath(ckpt_path, checkpoint_dir)
 
         all_results.append(summary)
 

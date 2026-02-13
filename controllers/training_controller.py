@@ -41,9 +41,18 @@ class TrainingController:
         self.epsilon_end = epsilon_end
         self.epsilon_decay_episodes = epsilon_decay_episodes
 
-        self.checkpoint_dir = checkpoint_dir
-        self.results_dir = results_dir
-        self.history_dir = history_dir
+        self.experiment_id = (
+            experiment_id
+            if experiment_id is not None
+            else datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        )
+
+        # -----------------------------
+        # AISLAMIENTO POR EXPERIMENTO
+        # -----------------------------
+        self.checkpoint_dir = os.path.join(checkpoint_dir, self.experiment_id)
+        self.results_dir = os.path.join(results_dir)
+        self.history_dir = os.path.join(history_dir)
 
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         os.makedirs(self.results_dir, exist_ok=True)
@@ -53,13 +62,7 @@ class TrainingController:
         self.success_threshold = success_threshold
         self.success_window = success_window
 
-        self.experiment_id = (
-            experiment_id
-            if experiment_id is not None
-            else datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        )
-
-        # Métricas principales
+        # Métricas
         self.episode_rewards = []
         self.episode_lengths = []
         self.full_success_history = []
@@ -113,7 +116,7 @@ class TrainingController:
                     success = info.get("success", False)
                     break
 
-            # Registrar métricas
+            # Métricas
             self.episode_rewards.append(float(episode_reward))
             self.episode_lengths.append(step + 1)
 
@@ -133,7 +136,9 @@ class TrainingController:
             if self._check_and_handle_progress(episode):
                 break
 
-        # Guardar modelos
+        # -----------------------------
+        # Guardar modelos aislados
+        # -----------------------------
         last_path = os.path.join(self.checkpoint_dir, "last_model.pth")
         self.agent.save(last_path)
 
@@ -142,7 +147,6 @@ class TrainingController:
             self.agent.save(best_path)
 
         evaluation_results = self._run_evaluation(best_path)
-
         training_summary = self._build_training_summary()
 
         experiment_results = {
@@ -152,7 +156,6 @@ class TrainingController:
             "evaluation": evaluation_results,
         }
 
-        # Guardar JSON principal
         results_path = os.path.join(
             self.results_dir, f"{self.experiment_id}.json"
         )
@@ -160,7 +163,6 @@ class TrainingController:
         with open(results_path, "w", encoding="utf-8") as f:
             json.dump(experiment_results, f, indent=2)
 
-        # Guardar historial separado (sandbox-ready)
         self._save_history_file()
 
         return experiment_results
@@ -168,7 +170,6 @@ class TrainingController:
     # -------------------------------------------------
 
     def _save_history_file(self):
-
         history_data = {
             "experiment_id": self.experiment_id,
             "episodes": list(range(1, len(self.episode_rewards) + 1)),
@@ -196,7 +197,6 @@ class TrainingController:
 
         success_rate = float(np.mean(self.success_history))
 
-        # Mejora detectada
         if success_rate > self.best_success_rate:
             self.best_success_rate = success_rate
             self.no_improve_counter = 0
@@ -208,15 +208,13 @@ class TrainingController:
         else:
             self.no_improve_counter += 1
 
-        # Early stop por threshold absoluto
         if success_rate >= self.success_threshold:
             print(
                 f"[Early Stop] Success rate alcanzado: "
-                f"{success_rate:.2f} en episodio {episode}"
+                f"{success_rate:.3f} en episodio {episode}"
             )
             return True
 
-        # Early stop por paciencia (solo si está activado)
         if self.early_stopping_patience is not None:
             if self.no_improve_counter >= self.early_stopping_patience:
                 print(
@@ -227,7 +225,6 @@ class TrainingController:
 
         return False
 
-
     # -------------------------------------------------
 
     def _run_evaluation(self, checkpoint_path: str) -> Dict[str, Any]:
@@ -236,7 +233,6 @@ class TrainingController:
             agent_factory=self.agent.factory,
             config=self.env.config,
         )
-
         return evaluator.evaluate_checkpoint(checkpoint_path)
 
     # -------------------------------------------------
@@ -250,8 +246,4 @@ class TrainingController:
             "final_epsilon": self.epsilon_history[-1]
             if self.epsilon_history
             else 0.0,
-            "reward_history": self.episode_rewards,
-            "length_history": self.episode_lengths,
-            "success_history": self.full_success_history,
-            "loss_history": self.loss_history,
         }

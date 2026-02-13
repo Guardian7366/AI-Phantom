@@ -14,30 +14,32 @@ def load_experiments(results_dir: str) -> List[Dict]:
     if not os.path.exists(results_dir):
         raise RuntimeError(f"Directorio no encontrado: {results_dir}")
 
-    for fname in os.listdir(results_dir):
-        if not fname.endswith(".json"):
-            continue
+    for root, _, files in os.walk(results_dir):
+        for fname in files:
+            if not fname.endswith(".json"):
+                continue
 
-        path = os.path.join(results_dir, fname)
+            path = os.path.join(root, fname)
 
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-        except Exception:
-            continue
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
 
-        if not isinstance(data, dict):
-            continue
+            if not isinstance(data, dict):
+                continue
 
-        if "training" not in data or "evaluation" not in data:
-            continue
+            if "training" not in data or "evaluation" not in data:
+                continue
 
-        experiments.append(data)
+            experiments.append(data)
 
     if not experiments:
         raise RuntimeError("No se encontraron experimentos válidos")
 
     return experiments
+
 
 
 def compute_statistics(values: List[float]) -> Dict:

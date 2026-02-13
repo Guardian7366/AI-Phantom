@@ -6,8 +6,6 @@ import argparse
 DEFAULT_RANKING_FILE = "results/penalized_ranking.json"
 DEFAULT_OUTPUT_DIR = "results/best_model"
 DEFAULT_OUTPUT_NAME = "best_model.pth"
-
-# Ruta REAL donde train guarda checkpoints
 DEFAULT_CHECKPOINT_DIR = "results/checkpoints"
 
 
@@ -30,13 +28,16 @@ def load_ranking(ranking_file: str):
     return ranking
 
 
-def resolve_checkpoint_path() -> str:
+def resolve_checkpoint_path(experiment_id: str) -> str:
     """
-    Convención REAL del proyecto:
-    results/checkpoints/best_model.pth
+    Nueva convención real del proyecto:
+
+    results/checkpoints/<experiment_id>/best_model.pth
     """
+
     ckpt_path = os.path.join(
         DEFAULT_CHECKPOINT_DIR,
+        experiment_id,
         "best_model.pth"
     )
 
@@ -66,13 +67,15 @@ def select_best_experiment(ranking):
 def promote_model(best_exp, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
 
-    ckpt_src = resolve_checkpoint_path()
+    experiment_id = best_exp["experiment_id"]
+
+    ckpt_src = resolve_checkpoint_path(experiment_id)
     ckpt_dst = os.path.join(output_dir, DEFAULT_OUTPUT_NAME)
 
     shutil.copyfile(ckpt_src, ckpt_dst)
 
     metadata = {
-        "experiment_id": best_exp["experiment_id"],
+        "experiment_id": experiment_id,
         "score": best_exp["score"],
         "eval_success": best_exp["eval_success"],
         "mean_reward": best_exp["mean_reward"],
