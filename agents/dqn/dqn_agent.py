@@ -166,21 +166,51 @@ class DQNAgent:
         next_states = torch.from_numpy(next_states).to(self.device, non_blocking=True)
         dones = torch.from_numpy(dones).to(self.device, non_blocking=True).unsqueeze(1)
 
-        q_values = self.policy_net(states).gather(1, actions)
+        # ------------------------------
+        # Mixed Precision Training
+        # ------------------------------
+        use_amp = self.device == "cuda"
 
-        with torch.no_grad():
-            next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
-            next_q = self.target_net(next_states).gather(1, next_actions)
-            target_q = rewards + self.gamma * next_q * (1 - dones)
+        if use_amp:
+            scaler = getattr(self, "scaler", None)
+            if scaler is None:
+                self.scaler = torch.cuda.amp.GradScaler()
+                scaler = self.scaler
 
-        loss = self.loss_fn(q_values, target_q)
+            with torch.cuda.amp.autocast():
+                q_values = self.policy_net(states).gather(1, actions)
 
-        self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
-        self.optimizer.step()
+                with torch.no_grad():
+                    next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
+                    next_q = self.target_net(next_states).gather(1, next_actions)
+                    target_q = rewards + self.gamma * next_q * (1 - dones)
 
-        # Soft target update optimizado
+                loss = self.loss_fn(q_values, target_q)
+
+            self.optimizer.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+            scaler.step(self.optimizer)
+            scaler.update()
+
+        else:
+            q_values = self.policy_net(states).gather(1, actions)
+
+            with torch.no_grad():
+                next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
+                next_q = self.target_net(next_states).gather(1, next_actions)
+                target_q = rewards + self.gamma * next_q * (1 - dones)
+
+            loss = self.loss_fn(q_values, target_q)
+
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+            self.optimizer.step()
+
+        # ------------------------------
+        # Soft target update
+        # ------------------------------
         for target_param, policy_param in zip(
             self.target_net.parameters(),
             self.policy_net.parameters()
@@ -188,7 +218,8 @@ class DQNAgent:
             target_param.data.mul_(1.0 - self.tau)
             target_param.data.add_(self.tau * policy_param.data)
 
-        return loss.item()
+        return float(loss.item())
+
    
 
     def save(self, path: str):

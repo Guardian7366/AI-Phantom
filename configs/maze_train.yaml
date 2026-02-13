@@ -1,4 +1,4 @@
-experiment_name: maze_dqn_v2
+experiment_name: maze_dqn_v2_phase2
 
 seeds:
   - 42
@@ -20,29 +20,28 @@ environment:
     - [0,0,0,0,1,1,0,0]
 
   randomize_grid: false
-  random_start_goal: false
+  random_start_goal: true
   wall_probability: 0.0
   max_steps: 200
-
 
 
 # -----------------------------------------
 # Training
 # -----------------------------------------
 training:
-  num_episodes: 2000
+  num_episodes: 3000
   max_steps_per_episode: 200
 
   epsilon_start: 1.0
-  epsilon_end: 0.02
-  epsilon_decay_episodes: 600
+  epsilon_end: 0.05
+  epsilon_decay_episodes: 1500   #  MÁS LENTO
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
 
   early_stopping_patience: null
-  success_threshold: 0.95
-  success_window: 200
+  success_threshold: 0.97
+  success_window: 300
 
 
 # -----------------------------------------
@@ -52,6 +51,9 @@ agent:
   gamma: 0.99
   learning_rate: 0.0001
 
-  batch_size: 256
-  replay_buffer_size: 100000
-  min_replay_size: 5000
+  batch_size: 128                 #  más estable
+  replay_buffer_size: 50000       #  menos memoria vieja
+  min_replay_size: 3000
+
+  tau: 0.01                       #  target más reactivo
+  update_frequency: 2             #  aprende más seguido

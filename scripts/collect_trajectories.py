@@ -40,7 +40,8 @@ def main():
     # Environment
     # ----------------------------
 
-    env = MazeEnvironment(config=cfg)
+    env = MazeEnvironment(config=cfg["environment"])
+
 
     # ----------------------------
     # Agent (inferencia pura)
@@ -59,8 +60,13 @@ def main():
         state_dim=env.state_dim,
         action_dim=env.action_space_n,
         replay_buffer=replay_buffer,
-        **agent_cfg
+        gamma=agent_cfg.get("gamma", 0.99),
+        lr=agent_cfg.get("learning_rate", 1e-4),
+        batch_size=agent_cfg.get("batch_size", 64),
+        min_replay_size=agent_cfg.get("min_replay_size", 1),
+        update_frequency=agent_cfg.get("update_frequency", 4),
     )
+
 
     agent.set_mode(training=False)
 

@@ -15,8 +15,9 @@ from agents.dqn.replay_buffer import ReplayBuffer
 # -------------------------------------------------
 
 def load_config(path: str) -> dict:
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
 
 
 # -------------------------------------------------
@@ -43,11 +44,10 @@ def build_agent(config: dict, env):
         batch_size=agent_cfg.get("batch_size", 64),
         min_replay_size=agent_cfg.get("min_replay_size", 1000),
         tau=agent_cfg.get("tau", 0.005),
+        update_frequency=agent_cfg.get("update_frequency", 4),
     )
 
     return agent
-
-
 
 
 # -------------------------------------------------

@@ -1,0 +1,32 @@
+[
+  {
+    "episodes": 100,
+    "success_rate": 0.85,
+    "mean_reward": -5.260617585206047,
+    "mean_length": 66.7,
+    "reward_std": 15.414290633510628,
+    "length_std": 140.12605039749036,
+    "reward_p25": 1.053125,
+    "reward_p50": 1.16125,
+    "reward_p75": 1.2590625,
+    "length_p25": 4.0,
+    "length_p50": 8.0,
+    "length_p75": 14.0,
+    "model": "best_model.pth"
+  },
+  {
+    "episodes": 100,
+    "success_rate": 0.81,
+    "mean_reward": -6.948504648780846,
+    "mean_length": 83.0,
+    "reward_std": 16.911500218433407,
+    "length_std": 153.59596348862817,
+    "reward_p25": 1.0479687571525576,
+    "reward_p50": 1.16125,
+    "reward_p75": 1.328125,
+    "length_p25": 6.0,
+    "length_p50": 9.5,
+    "length_p75": 15.25,
+    "model": "last_model.pth"
+  }
+]

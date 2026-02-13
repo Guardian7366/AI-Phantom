@@ -50,7 +50,11 @@ def main():
 
     try:
         # 🔑 IMPORTANTE: el entorno recibe el CONFIG COMPLETO
-        env = MazeEnvironment(config=cfg)
+        env_config = cfg.get("environment")
+        if env_config is None:
+            fail("environment section not found in config")
+
+        env = MazeEnvironment(config=env_config)
         success("Environment initialized")
     except Exception as e:
         fail(f"Environment failed to initialize: {e}")

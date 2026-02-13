@@ -45,16 +45,20 @@ def main():
     # Factories
     # -------------------------------------------------
 
+    # -------------------------------------------------
+    # Factories (CORRECTAS)
+    # -------------------------------------------------
+
+    env_cfg = cfg["environment"]
+
     def env_factory():
-        return MazeEnvironment(cfg)
+        return MazeEnvironment(env_cfg)
 
     def agent_factory():
-        temp_env = MazeEnvironment(cfg)
+        temp_env = MazeEnvironment(env_cfg)
 
         replay_buffer = ReplayBuffer(capacity=1)
 
-        # 🔒 NO dependemos de cfg["agent"]
-        # Solo usamos dimensiones reales del entorno
         agent = DQNAgent(
             state_dim=temp_env.state_dim,
             action_dim=temp_env.action_space_n,
@@ -63,6 +67,7 @@ def main():
 
         agent.set_mode(training=False)
         return agent
+
 
     # -------------------------------------------------
     # Evaluación

@@ -109,7 +109,7 @@ def main():
         evaluator = EvaluationController(
             env_factory=env_factory,
             agent_factory=agent_factory,
-            config=config,
+            config=env_cfg,
         )
 
         summary = evaluator.evaluate_checkpoint(ckpt_path)

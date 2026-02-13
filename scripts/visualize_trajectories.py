@@ -35,11 +35,13 @@ def main():
     # ✅ Parámetros permitidos por DQNAgent.__init__
     allowed_keys = {
         "gamma",
-        "lr",
+        "learning_rate",
         "batch_size",
-        "target_update_freq",
+        "min_replay_size",
+        "update_frequency",
         "device",
     }
+
 
     agent_cfg = {
         k: v for k, v in raw_agent_cfg.items() if k in allowed_keys
@@ -50,7 +52,12 @@ def main():
         state_dim=state_dim,
         action_dim=action_dim,
         replay_buffer=replay_buffer,
-        **agent_cfg,
+        gamma=agent_cfg.get("gamma", 0.99),
+        lr=agent_cfg.get("learning_rate", 1e-4),
+        batch_size=agent_cfg.get("batch_size", 64),
+        min_replay_size=agent_cfg.get("min_replay_size", 1),
+        update_frequency=agent_cfg.get("update_frequency", 4),
+        device=agent_cfg.get("device", None),
     )
 
     # ----------------------------

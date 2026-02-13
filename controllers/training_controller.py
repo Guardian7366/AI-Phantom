@@ -157,7 +157,7 @@ class TrainingController:
             self.results_dir, f"{self.experiment_id}.json"
         )
 
-        with open(results_path, "w") as f:
+        with open(results_path, "w", encoding="utf-8") as f:
             json.dump(experiment_results, f, indent=2)
 
         # Guardar historial separado (sandbox-ready)
@@ -185,7 +185,7 @@ class TrainingController:
             f"{self.experiment_id}_history.json"
         )
 
-        with open(history_path, "w") as f:
+        with open(history_path, "w", encoding="utf-8") as f:
             json.dump(history_data, f, indent=2)
 
     # -------------------------------------------------

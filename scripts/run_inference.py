@@ -41,8 +41,10 @@ def build_agent(config: dict, env):
         gamma=agent_cfg.get("gamma", 0.99),
         lr=agent_cfg.get("learning_rate", 1e-3),
         batch_size=agent_cfg.get("batch_size", 64),
-        target_update_freq=agent_cfg.get("target_update_frequency", 1000),
+        min_replay_size=agent_cfg.get("min_replay_size", 1),
+        update_frequency=agent_cfg.get("update_frequency", 4),
     )
+
 
     return agent
 
