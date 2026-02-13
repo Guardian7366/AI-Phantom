@@ -210,7 +210,7 @@ class DQNAgent:
 
 
         loss = self.loss_fn(q_values, target_q)
-        q_reg = 1e-4 * q_values.pow(2).mean()
+        q_reg = 1e-5 * q_values.pow(2).mean()
         loss = loss + q_reg
 
         self.optimizer.zero_grad()
