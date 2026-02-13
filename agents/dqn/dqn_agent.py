@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from agents.dqn.replay_buffer import ReplayBuffer
+from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
 
 # =====================================================
@@ -70,7 +70,7 @@ class DQNAgent:
         self,
         state_dim,
         action_dim: int,
-        replay_buffer: ReplayBuffer,
+        replay_buffer: PrioritizedReplayBuffer,
         gamma: float = 0.99,
         lr: float = 1e-4,
         batch_size: int = 64,
@@ -126,7 +126,7 @@ class DQNAgent:
         self.factory: Callable[[], "DQNAgent"] = self._build_factory
 
     def _build_factory(self):
-        replay_buffer = ReplayBuffer(capacity=1)
+        replay_buffer = PrioritizedReplayBuffer(capacity=1)
         agent = DQNAgent(replay_buffer=replay_buffer, **self._init_params)
         agent.set_mode(False)
         return agent
@@ -166,8 +166,10 @@ class DQNAgent:
         if len(self.replay_buffer) < max(self.batch_size, self.min_replay_size):
             return None
 
-        states, actions, rewards, next_states, dones = \
+        states, actions, rewards, next_states, dones, indices, weights = \
             self.replay_buffer.sample(self.batch_size)
+
+        weights = torch.from_numpy(weights).to(self.device).unsqueeze(1)
 
         states = torch.from_numpy(states).to(self.device, non_blocking=True)
         actions = torch.from_numpy(actions).long().to(self.device, non_blocking=True).unsqueeze(1)
@@ -191,13 +193,16 @@ class DQNAgent:
                     target_q = rewards + self.gamma * next_q * (1 - dones)
                     target_q = target_q.detach()
 
-                loss = self.loss_fn(q_values, target_q)
+                loss = (weights * (q_values - target_q).pow(2)).mean()
 
             self.optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            td_errors = (q_values - target_q).detach().cpu().numpy()
+            self.replay_buffer.update_priorities(indices, td_errors)
+
 
         else:
             q_values = self.policy_net(states).gather(1, actions)
@@ -207,12 +212,15 @@ class DQNAgent:
                 next_q = self.target_net(next_states).gather(1, next_actions)
                 target_q = rewards + self.gamma * next_q * (1 - dones)
 
-            loss = self.loss_fn(q_values, target_q)
+            loss = (weights * (q_values - target_q).pow(2)).mean()
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.optimizer.step()
+            td_errors = (q_values - target_q).detach().cpu().numpy()
+            self.replay_buffer.update_priorities(indices, td_errors)
+
 
 
         # ------------------------------

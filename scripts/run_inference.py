@@ -3,7 +3,7 @@ import yaml
 
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import ReplayBuffer
+from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 from controllers.inference_controller import InferenceController
 
 
@@ -32,7 +32,7 @@ def build_agent(config: dict, env):
     # Si existe replay_buffer_size (por compatibilidad con train), usarlo.
     buffer_capacity = agent_cfg.get("replay_buffer_size", 1)
 
-    replay_buffer = ReplayBuffer(capacity=buffer_capacity)
+    replay_buffer = PrioritizedReplayBuffer(capacity=buffer_capacity)
 
     agent = DQNAgent(
         state_dim=env.state_dim,

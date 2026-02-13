@@ -7,7 +7,7 @@ from utils.seeding import set_global_seed
 
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import ReplayBuffer
+from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
 
 # -------------------------------------------------
@@ -31,7 +31,7 @@ def build_environment(config: dict):
 def build_agent(config: dict, env):
     agent_cfg = config["agent"]
 
-    replay_buffer = ReplayBuffer(
+    replay_buffer = PrioritizedReplayBuffer(
         capacity=agent_cfg["replay_buffer_size"]
     )
 

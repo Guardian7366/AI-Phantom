@@ -59,7 +59,7 @@ def main():
     except Exception as e:
         fail(f"Environment failed to initialize: {e}")
 
-    from agents.dqn.replay_buffer import ReplayBuffer
+    from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
     # ----------------------------
     # Agent
@@ -76,7 +76,7 @@ def main():
         }
 
         # 🔑 Replay buffer dummy (inferencia)
-        replay_buffer = ReplayBuffer(capacity=1)
+        replay_buffer = PrioritizedReplayBuffer(capacity=1)
 
         agent = DQNAgent(
             state_dim=env.state_dim,

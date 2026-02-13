@@ -11,7 +11,7 @@ import argparse
 from controllers.evaluation_controller import EvaluationController
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import ReplayBuffer
+from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
 
 # -------------------------------------------------
@@ -80,7 +80,7 @@ def main():
 
         def agent_factory():
             temp_env = MazeEnvironment(env_cfg)
-            replay_buffer = ReplayBuffer(capacity=1)
+            replay_buffer = PrioritizedReplayBuffer(capacity=1)
 
             return DQNAgent(
                 state_dim=temp_env.state_dim,
@@ -93,7 +93,7 @@ def main():
         temp_agent = DQNAgent(
             state_dim=temp_env.state_dim,
             action_dim=temp_env.action_space_n,
-            replay_buffer=ReplayBuffer(capacity=1),
+            replay_buffer=PrioritizedReplayBuffer(capacity=1),
         )
 
         ckpt_path = os.path.join(checkpoint_dir, ckpt)

@@ -55,5 +55,5 @@ agent:
   replay_buffer_size: 50000       #  menos memoria vieja
   min_replay_size: 3000
 
-  tau: 0.01                       #  target más reactivo
-  update_frequency: 2             #  aprende más seguido
+  tau: 0.005                       #  modelo 2.4
+  update_frequency: 4             #  modelo 2.4

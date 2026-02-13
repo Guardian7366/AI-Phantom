@@ -4,7 +4,7 @@ import yaml
 
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import ReplayBuffer
+from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 from controllers.inference_controller import InferenceController
 
 
@@ -54,7 +54,7 @@ def main():
         if k not in {"type", "epsilon"}
     }
 
-    replay_buffer = ReplayBuffer(capacity=1)
+    replay_buffer = PrioritizedReplayBuffer(capacity=1)
 
     agent = DQNAgent(
         state_dim=env.state_dim,

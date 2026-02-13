@@ -5,7 +5,7 @@ from pathlib import Path
 
 from environments.maze.maze_env import MazeEnvironment
 from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import ReplayBuffer
+from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,7 +65,7 @@ def main():
     # ----------------------------
     # Agent
     # ----------------------------
-    replay_buffer = ReplayBuffer(capacity=1)  # dummy
+    replay_buffer = PrioritizedReplayBuffer(capacity=1)  # dummy
 
     agent_cfg = dict(config.get("agent", {}))
     agent_cfg.pop("type", None)      # metadata
