@@ -265,6 +265,11 @@ class SelectionMenuScreen:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         for card in self.cards:
                             if card["rect"].collidepoint(event.pos):
+                                title = card["title"]
+                                if title == "Maze":
+                                    return "maze_train"
+                                if title == "Archery":
+                                    return "archery_train"
                                 print(f"Selected: {card['title']}")
 
             self.screen.fill((18, 18, 28))
