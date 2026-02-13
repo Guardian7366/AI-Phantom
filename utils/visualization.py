@@ -64,6 +64,54 @@ class Button:
                 return True
         return False
 
+class Icon_Button:
+    def __init__(self, rect, path, font, base_color, hover_color, click_sound=None):
+        self.rect = pygame.Rect(rect)
+        self.path = path
+        self.font = font
+        self.base_color = base_color
+        self.hover_color = hover_color
+        self.current_color = base_color
+        self.click_sound = click_sound
+
+        self.image = pygame.image.load(path).convert_alpha()
+
+        self.image = pygame.transform.scale(
+                self.image,
+                (self.rect.width - 20, self.rect.height - 20)
+            )
+
+        self.scale_factor = 1.0
+        self.animation_speed = 0.1
+
+    def draw(self, screen):
+        scaled_rect = self.rect.inflate(
+            self.rect.width * (self.scale_factor - 1),
+            self.rect.height * (self.scale_factor - 1)
+        )
+
+        pygame.draw.rect(screen, self.current_color, scaled_rect)
+        pygame.draw.rect(screen, (255, 255, 255), scaled_rect, 3)
+
+        image_rect = self.image.get_rect(center=self.rect.center)
+        screen.blit(self.image, image_rect)
+
+    def update(self, mouse_pos):
+        if self.rect.collidepoint(mouse_pos):
+            self.current_color = self.hover_color
+            self.scale_factor = min(1.08, self.scale_factor + self.animation_speed)
+        else:
+            self.current_color = self.base_color
+            self.scale_factor = max(1.0, self.scale_factor - self.animation_speed)
+
+    def is_clicked(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if self.rect.collidepoint(event.pos):
+                if self.click_sound:
+                    self.click_sound.play()
+                return True
+        return False
+
 
 # ============================================================
 # START SCREEN
