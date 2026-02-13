@@ -5,7 +5,7 @@ from typing import Dict, Any, Callable, List
 class EvaluationController:
     """
     Controlador de evaluación cuantitativa.
-    Ejecuta episodios deterministas usando factories para reproducibilidad.
+    Ejescuta episodios deterministas usando factories para reproducibilidad.
     """
 
     def __init__(
