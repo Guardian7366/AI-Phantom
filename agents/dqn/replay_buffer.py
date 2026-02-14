@@ -21,7 +21,7 @@ class PrioritizedReplayBuffer:
         self.priorities[self.pos] = max_prio
         self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size: int, beta: float = 0.4):
+    def sample(self, batch_size: int, beta: float): # Modelo 2.4.4
 
         if len(self.buffer) == self.capacity:
             prios = self.priorities

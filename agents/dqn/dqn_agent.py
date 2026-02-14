@@ -91,6 +91,8 @@ class DQNAgent:
         update_frequency=update_frequency,
         device=device,
     )
+        self.beta_start = 0.4
+        self.beta_frames = 200000
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.replay_buffer = replay_buffer
@@ -166,8 +168,10 @@ class DQNAgent:
         if len(self.replay_buffer) < max(self.batch_size, self.min_replay_size):
             return None
 
+        beta = self._beta_by_frame()
         states, actions, rewards, next_states, dones, indices, weights = \
-            self.replay_buffer.sample(self.batch_size)
+            self.replay_buffer.sample(self.batch_size, beta)
+
 
         weights = torch.from_numpy(weights).to(self.device).unsqueeze(1)
 
@@ -249,4 +253,11 @@ class DQNAgent:
             torch.load(path, map_location=self.device, weights_only=True)
         )
         self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def _beta_by_frame(self):
+        return min(
+            1.0,
+            self.beta_start + (1.0 - self.beta_start) *
+            (self.step_counter / self.beta_frames)
+        )
 

@@ -101,7 +101,7 @@ class MazeEnvironment:
         nx = self.agent_pos[0] + dx
         ny = self.agent_pos[1] + dy
 
-        reward = -0.01
+        reward = -0.015 # Modelo 2.4.6
         done = False
         info = {"success": False}
 
@@ -114,13 +114,13 @@ class MazeEnvironment:
 
             visit_count = self.visit_counts[nx, ny]
             if visit_count > 0:
-                reward -= 0.02 * visit_count
+                reward -= 0.01 * min(visit_count, 5) # Modelo 2.4.4
 
             self.visit_counts[nx, ny] += 1
 
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
-        gamma = 0.9 # Modelo 2.4.3
+        gamma = 0.99 # Modelo 2.4.4
         max_dist = self.height + self.width
 
         old_potential = -old_dist / max_dist
@@ -133,6 +133,7 @@ class MazeEnvironment:
             info["success"] = True
 
         if self.steps >= self.max_steps:
+            reward -= 0.75 # modelo 2.4.6
             done = True
 
         return self._get_state(), reward, done, info

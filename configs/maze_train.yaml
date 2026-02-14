@@ -33,15 +33,15 @@ training:
   max_steps_per_episode: 200
 
   epsilon_start: 1.0
-  epsilon_end: 0.1 # modelo 2.4.3
-  epsilon_decay_episodes: 2500   #  modelo 2.4.3
+  epsilon_end: 0.02  # modelo 2.4.5
+  epsilon_decay_episodes: 1500   #  modelo 2.4.5
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
 
   early_stopping_patience: null
-  success_threshold: 0.995   # modelo 2.4.2
-  success_window: 700  # modelo 2.4.2
+  success_threshold: 0.998   # modelo 2.4.6
+  success_window: 1000 # modelo 2.4.6
 
 
 # -----------------------------------------
@@ -51,9 +51,9 @@ agent:
   gamma: 0.99
   learning_rate: 0.0001
 
-  batch_size: 256              #  modelo 2.4.2
+  batch_size: 128              #  modelo 2.4.4
   replay_buffer_size: 30000       #  modelo 2.4.3
-  min_replay_size: 5000 # modelo 2.4.3
+  min_replay_size: 8000 # modelo 2.4.5
 
   tau: 0.005                       #  modelo 2.4
   update_frequency: 4             #  modelo 2.4
