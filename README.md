@@ -62,7 +62,7 @@ python -m scripts.perturbed_evaluation
 python -m scripts.stochastic_evaluation
 ```
 
-## Visualization and Analysis
+## Visualization
 
 11. Visualizes agent trajectories from inference runs, using the best model and configuration.
 
@@ -76,21 +76,35 @@ python -m scripts.visualize_trajectories
 python -m scripts.visualize_results
 ```
 
-13. Compares experiment results, aggregating and analyzing metrics across runs.
+13. Plots training curves (reward, loss, etc.) for experiment runs.
+
+```
+python -m scripts.plot_training_curve
+```
+
+## Analysis
+
+14. Compares experiment results, aggregating and analyzing metrics across runs.
 
 ```
 python -m scripts.compare_results
 ```
 
+15. Analyzes robustness across experiments (aggregates robustness metrics).
+
+```
+python -m scripts.robustness_analysis
+```
+
 ## Rendering and Debugging
 
-12. Renders the maze environment as ASCII art for visualization and debugging.
+16. Renders the maze environment as ASCII art for visualization and debugging.
 
 ```
 python -m scripts.render_maze_ascii
 ```
 
-13. Renders the maze with a specific agent trajectory overlaid in ASCII art.
+17. Renders the maze with a specific agent trajectory overlaid in ASCII art.
 
 ```
 python -m scripts.render_maze_trajectory
@@ -98,13 +112,13 @@ python -m scripts.render_maze_trajectory
 
 ## Utilities and Packaging
 
-14. Runs inference with a trained model (can be used for custom inference runs).
+18. Runs inference with a trained model (can be used for custom inference runs).
 
 ```
 python -m scripts.run_inference
 ```
 
-15. Packages the final experiment results and artifacts for sharing or archiving.
+19. Packages the final experiment results and artifacts for sharing or archiving.
 
 ```
 python -m scripts.package_experiment
