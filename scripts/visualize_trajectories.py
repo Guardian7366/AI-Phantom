@@ -19,20 +19,24 @@ def main():
     config = load_yaml_config("configs/maze_inference.yaml")
     set_global_seed(config.get("seed", 123))
 
+    # 🔑 CORRECCIÓN IMPORTANTE
+    env_config = config.get("environment")
+    if env_config is None:
+        raise RuntimeError("environment section missing in config")
+
     # ----------------------------
     # Environment
     # ----------------------------
-    env = MazeEnvironment(config)
+    env = MazeEnvironment(env_config)
 
     # ----------------------------
     # Agent
     # ----------------------------
-    state_dim = env.observation_space
-    action_dim = env.action_space
+    state_dim = env.state_dim
+    action_dim = env.action_space_n
 
     raw_agent_cfg = dict(config.get("agent", {}))
 
-    # ✅ Parámetros permitidos por DQNAgent.__init__
     allowed_keys = {
         "gamma",
         "learning_rate",
@@ -42,12 +46,12 @@ def main():
         "device",
     }
 
-
     agent_cfg = {
         k: v for k, v in raw_agent_cfg.items() if k in allowed_keys
     }
 
-    replay_buffer = PrioritizedReplayBuffer(capacity=1)  # dummy buffer
+    replay_buffer = PrioritizedReplayBuffer(capacity=1)
+
     agent = DQNAgent(
         state_dim=state_dim,
         action_dim=action_dim,
@@ -66,6 +70,9 @@ def main():
     controller = InferenceController(
         env=env,
         agent=agent,
+        model_path=config.get("model", {}).get("path", DEFAULT_BEST_MODEL_PATH),
+        num_episodes=5,
+        max_steps_per_episode=env.max_steps,
     )
 
     # ----------------------------
@@ -93,4 +100,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -34,8 +34,10 @@ class EvaluationController:
         """
 
         if self.seed is not None:
+            import random
             np.random.seed(self.seed)
-
+            random.seed(self.seed)
+            
         env = self.env_factory()
         agent = self.agent_factory()
 

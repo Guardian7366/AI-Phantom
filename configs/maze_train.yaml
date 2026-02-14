@@ -19,9 +19,9 @@ environment:
     - [0,1,0,1,0,0,0,0]
     - [0,0,0,0,1,1,0,0]
 
-  randomize_grid: false
-  random_start_goal: true
-  wall_probability: 0.0
+  randomize_grid: true # Modelo 2.5
+  random_start_goal: true 
+  wall_probability: 0.10 # Modelo 2.5
   max_steps: 200
 
 
@@ -29,12 +29,12 @@ environment:
 # Training
 # -----------------------------------------
 training:
-  num_episodes: 3500 # 2.4.2
+  num_episodes: 8000 # 2.5.1
   max_steps_per_episode: 200
 
   epsilon_start: 1.0
-  epsilon_end: 0.02  # modelo 2.4.5
-  epsilon_decay_episodes: 1500   #  modelo 2.4.5
+  epsilon_end: 0.05  # modelo 2.5.1
+  epsilon_decay_episodes: 3500 #  modelo 2.4.5
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
@@ -49,11 +49,11 @@ training:
 # -----------------------------------------
 agent:
   gamma: 0.99
-  learning_rate: 0.0001
+  learning_rate: 0.00005 # modelo 2.5.1
 
   batch_size: 128              #  modelo 2.4.4
-  replay_buffer_size: 30000       #  modelo 2.4.3
-  min_replay_size: 8000 # modelo 2.4.5
+  replay_buffer_size: 100000      #  modelo 2.5.1
+  min_replay_size: 20000 # modelo 2.5.1
 
-  tau: 0.005                       #  modelo 2.4
+  tau: 0.002                     #  modelo 2.5.1
   update_frequency: 4             #  modelo 2.4

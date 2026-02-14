@@ -85,6 +85,9 @@ class MazeEnvironment:
 
         self.agent_pos = list(self.start)
 
+        self.visited = set()
+        self.visited.add(self.agent_pos)
+
         self.visit_counts = np.zeros((self.height, self.width), dtype=np.float32)
         self.visit_counts[self.agent_pos[0], self.agent_pos[1]] += 1
 
@@ -135,6 +138,11 @@ class MazeEnvironment:
         if self.steps >= self.max_steps:
             reward -= 0.75 # modelo 2.4.6
             done = True
+        
+        if hasattr(self, "visited"):
+            if (nx, ny) in self.visited:
+                reward -= 0.05
+            self.visited.add((nx, ny))
 
         return self._get_state(), reward, done, info
 

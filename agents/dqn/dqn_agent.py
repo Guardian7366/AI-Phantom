@@ -24,9 +24,12 @@ class CNN_Dueling_DQN(nn.Module):
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
         )
 
-        conv_out_size = 64 * h * w
+
+        conv_out_size = 128 * h * w
 
         self.fc = nn.Sequential(
             nn.Flatten(),
