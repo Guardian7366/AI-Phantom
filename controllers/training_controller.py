@@ -6,6 +6,7 @@ from typing import Dict, Any
 from datetime import datetime
 
 from controllers.evaluation_controller import EvaluationController
+from environments.maze.maze_env import MazeEnvironment
 
 
 class TrainingController:
@@ -16,7 +17,7 @@ class TrainingController:
 
     def __init__(
         self,
-        env,
+        env : MazeEnvironment,
         agent,
         num_episodes: int,
         max_steps_per_episode: int,
@@ -197,6 +198,32 @@ class TrainingController:
 
         success_rate = float(np.mean(self.success_history))
 
+        # -----------------------------
+        # Curriculum progression estable
+        # -----------------------------
+        if hasattr(self.env, "curriculum_level"):
+            if not hasattr(self, "_curriculum_cooldown"):
+                self._curriculum_cooldown = False
+
+            if (
+                success_rate >= 0.70
+                and self.env.curriculum_level < 3
+                and not self._curriculum_cooldown
+            ):
+                new_level = self.env.curriculum_level + 1
+                self.env.set_curriculum_level(new_level)
+
+                self.epsilon_start = max(self.epsilon_end, 0.2)
+
+                self._curriculum_cooldown = True
+                print(f"[Curriculum] Subiendo a nivel {new_level}")
+
+            if success_rate < 0.65:
+                self._curriculum_cooldown = False
+
+        # -----------------------------
+        # Best model tracking
+        # -----------------------------
         if success_rate > self.best_success_rate:
             self.best_success_rate = success_rate
             self.no_improve_counter = 0
@@ -224,6 +251,7 @@ class TrainingController:
                 return True
 
         return False
+
 
     # -------------------------------------------------
 

@@ -59,19 +59,19 @@ def compute_penalty(exp: Dict) -> Dict:
     mean_reward = evaluation.get("mean_reward", 0.0)
 
     penalties = []
-    score = eval_success  # base score
+    score = eval_success
 
     # 1. Overfitting
     if train_success > 0.9 and eval_success < 0.7:
         penalties.append("OVERFIT")
         score -= 0.3
 
-    # 2. Política ineficiente
-    if eval_success > 0.7 and mean_length > 1.5 * np.mean([mean_length]):
+    # 2. Política lenta (si resuelve pero tarda demasiado)
+    if eval_success > 0.7 and mean_length > 1.8 * 8:
         penalties.append("INEFFICIENT")
         score -= 0.2
 
-    # 3. Reward engañoso
+    # 3. Reward hack
     if mean_reward > 0 and eval_success < 0.5:
         penalties.append("REWARD_HACK")
         score -= 0.2
@@ -86,6 +86,7 @@ def compute_penalty(exp: Dict) -> Dict:
         "mean_length": round(mean_length, 2),
         "penalties": penalties,
     }
+
 
 
 def rank_experiments(experiments: List[Dict]) -> List[Dict]:

@@ -10,6 +10,8 @@ class PrioritizedReplayBuffer:
         self.priorities = np.zeros((capacity,), dtype=np.float32)
         self.pos = 0
 
+    # -----------------------------------------------------
+
     def push(self, state, action, reward, next_state, done):
         max_prio = self.priorities.max() if self.buffer else 1.0
 
@@ -21,20 +23,30 @@ class PrioritizedReplayBuffer:
         self.priorities[self.pos] = max_prio
         self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size: int, beta: float): # Modelo 2.4.4
+    # -----------------------------------------------------
+
+    def sample(self, batch_size: int, beta: float):
 
         if len(self.buffer) == self.capacity:
             prios = self.priorities
         else:
-            prios = self.priorities[:self.pos]
+            prios = self.priorities[:len(self.buffer)]
 
+        # --- Probabilidades ---
         probs = prios ** self.alpha
-        probs /= probs.sum()
+        prob_sum = probs.sum()
+
+        # Evitar división por cero
+        if prob_sum == 0:
+            probs = np.ones_like(probs) / len(probs)
+        else:
+            probs = probs / prob_sum
 
         indices = np.random.choice(len(self.buffer), batch_size, p=probs)
         samples = [self.buffer[idx] for idx in indices]
 
         total = len(self.buffer)
+
         weights = (total * probs[indices]) ** (-beta)
         weights /= weights.max()
 
@@ -50,10 +62,13 @@ class PrioritizedReplayBuffer:
             np.array(weights, dtype=np.float32),
         )
 
+    # -----------------------------------------------------
+
     def update_priorities(self, indices, td_errors):
         for idx, td in zip(indices, td_errors):
-            self.priorities[idx] = abs(td) + 1e-6
+            self.priorities[idx] = abs(float(td)) + 1e-6
+
+    # -----------------------------------------------------
 
     def __len__(self):
         return len(self.buffer)
-

@@ -4,16 +4,12 @@ import random
 
 
 class MazeEnvironment:
-    """
-    Maze Essnvironment v5.0
-    CNN-ready state representation (C, H, W)
-    """
 
     ACTIONS = {
-        0: (-1, 0),  # up
-        1: (0, 1),   # right
-        2: (1, 0),   # down
-        3: (0, -1),  # left
+        0: (-1, 0),
+        1: (0, 1),
+        2: (1, 0),
+        3: (0, -1),
     }
 
     def __init__(self, config: dict):
@@ -25,15 +21,14 @@ class MazeEnvironment:
         self.base_grid = np.array(config["grid"], dtype=np.int32)
         self.height, self.width = self.base_grid.shape
 
-        self.random_start_goal = config.get("random_start_goal", False)
-        self.randomize_grid = config.get("randomize_grid", False)
-        self.wall_probability = config.get("wall_probability", 0.25)
         self.max_steps = config.get("max_steps", 500)
 
-        # CNN state shape
+        # Curriculum level
+        self.curriculum_level = 0
+
         self.channels = 4
         self.state_shape = (self.channels, self.height, self.width)
-        self.state_dim = self.state_shape  # importante para el agent
+        self.state_dim = self.state_shape
 
         self.action_space_n = 4
         self.action_space = self.action_space_n
@@ -43,9 +38,35 @@ class MazeEnvironment:
             lambda: MazeEnvironment(self.config)
         )
 
-    # --------------------------------------------------
-    # Grid
-    # --------------------------------------------------
+    # ======================================================
+    # CURRICULUM CONTROL
+    # ======================================================
+
+    def set_curriculum_level(self, level: int):
+        self.curriculum_level = level
+
+    def _apply_curriculum(self):
+        if self.curriculum_level == 0:
+            self.randomize_grid = False
+            self.random_start_goal = False
+            self.wall_probability = 0.0
+
+        elif self.curriculum_level == 1:
+            self.randomize_grid = False
+            self.random_start_goal = True
+            self.wall_probability = 0.05
+
+        elif self.curriculum_level == 2:
+            self.randomize_grid = True
+            self.random_start_goal = True
+            self.wall_probability = 0.08
+
+        else:
+            self.randomize_grid = True
+            self.random_start_goal = True
+            self.wall_probability = 0.12
+
+    # ======================================================
 
     def _generate_random_grid(self):
         grid = np.zeros((self.height, self.width), dtype=np.int32)
@@ -62,11 +83,10 @@ class MazeEnvironment:
             if self.grid[x, y] == 0:
                 return (x, y)
 
-    # --------------------------------------------------
-    # Reset
-    # --------------------------------------------------
+    # ======================================================
 
     def reset(self):
+        self._apply_curriculum()
         self.steps = 0
 
         if self.randomize_grid:
@@ -85,17 +105,12 @@ class MazeEnvironment:
 
         self.agent_pos = list(self.start)
 
-        self.visited = set()
-        self.visited.add(self.agent_pos)
-
         self.visit_counts = np.zeros((self.height, self.width), dtype=np.float32)
         self.visit_counts[self.agent_pos[0], self.agent_pos[1]] += 1
 
         return self._get_state()
 
-    # --------------------------------------------------
-    # Step
-    # --------------------------------------------------
+    # ======================================================
 
     def step(self, action: int):
         self.steps += 1
@@ -104,7 +119,7 @@ class MazeEnvironment:
         nx = self.agent_pos[0] + dx
         ny = self.agent_pos[1] + dy
 
-        reward = -0.015 # Modelo 2.4.6
+        reward = -0.015
         done = False
         info = {"success": False}
 
@@ -117,13 +132,13 @@ class MazeEnvironment:
 
             visit_count = self.visit_counts[nx, ny]
             if visit_count > 0:
-                reward -= 0.01 * min(visit_count, 5) # Modelo 2.4.4
+                reward -= 0.01 * min(visit_count, 5)
 
             self.visit_counts[nx, ny] += 1
 
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
-        gamma = 0.99 # Modelo 2.4.4
+        gamma = 0.99
         max_dist = self.height + self.width
 
         old_potential = -old_dist / max_dist
@@ -136,19 +151,12 @@ class MazeEnvironment:
             info["success"] = True
 
         if self.steps >= self.max_steps:
-            reward -= 0.75 # modelo 2.4.6
+            reward -= 0.75
             done = True
-        
-        if hasattr(self, "visited"):
-            if (nx, ny) in self.visited:
-                reward -= 0.05
-            self.visited.add((nx, ny))
 
         return self._get_state(), reward, done, info
 
-    # --------------------------------------------------
-    # State
-    # --------------------------------------------------
+    # ======================================================
 
     def _get_state(self):
         walls = self.grid.astype(np.float32)
@@ -163,14 +171,7 @@ class MazeEnvironment:
         if visits.max() > 0:
             visits = visits / visits.max()
 
-        state = np.stack(
-            [walls, agent_layer, goal_layer, visits],
-            axis=0,
-        )
-
-        return state.astype(np.float32)
-
-    # --------------------------------------------------
+        return np.stack([walls, agent_layer, goal_layer, visits], axis=0).astype(np.float32)
 
     def _is_wall(self, x, y):
         if x < 0 or y < 0 or x >= self.height or y >= self.width:

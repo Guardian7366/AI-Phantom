@@ -209,8 +209,9 @@ class DQNAgent:
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            td_errors = td_error.detach().cpu().numpy()
+            td_errors = td_error.detach().cpu().numpy().squeeze()
             self.replay_buffer.update_priorities(indices, td_errors)
+
 
 
         else:
@@ -229,10 +230,8 @@ class DQNAgent:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.optimizer.step()
-            td_errors = td_error.detach().cpu().numpy()
+            td_errors = td_error.detach().cpu().numpy().squeeze()
             self.replay_buffer.update_priorities(indices, td_errors)
-
-
 
         # ------------------------------
         # Soft target update

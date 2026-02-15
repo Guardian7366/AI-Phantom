@@ -91,7 +91,7 @@ def main():
 
     done = False
     step = 0
-    max_steps = config.get("max_steps", 100)
+    max_steps = config["environment"].get("max_steps", 100)
 
     while not done and step < max_steps:
         action = agent.select_action(state, epsilon=0.0)

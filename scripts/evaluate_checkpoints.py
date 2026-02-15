@@ -109,7 +109,7 @@ def main():
         )
 
         if not validate_checkpoint_compatibility(temp_agent, ckpt_path):
-            print(f"[SKIP] Checkpoint incompatible: {ckpt}")
+            print(f"[SKIP] Checkpoint incompatible: {ckpt_path}")
             continue
 
         # -------------------------------------------------
