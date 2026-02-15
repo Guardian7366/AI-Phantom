@@ -22,14 +22,19 @@ class CNN_Dueling_DQN(nn.Module):
         self.conv = nn.Sequential(
             nn.Conv2d(c, 32, kernel_size=3, padding=1),
             nn.ReLU(),
+            nn.MaxPool2d(2),
+
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
+            nn.MaxPool2d(2),
+
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
         )
 
 
-        conv_out_size = 128 * h * w
+
+        conv_out_size = 128 * (h // 4) * (w // 4)
 
         self.fc = nn.Sequential(
             nn.Flatten(),
@@ -190,27 +195,33 @@ class DQNAgent:
         # ------------------------------
         use_amp = self.device == "cuda"
 
+        # Modelo 2.5.4
         if use_amp:
+
+            with torch.no_grad():
+                next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
+
             with torch.amp.autocast("cuda"):
                 q_values = self.policy_net(states).gather(1, actions)
 
                 with torch.no_grad():
-                    next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
                     next_q = self.target_net(next_states).gather(1, next_actions)
                     target_q = rewards + self.gamma * next_q * (1 - dones)
-                    target_q = target_q.detach()
+                    target_q = torch.clamp(target_q, -5.0, 5.0)
+
 
                 td_error = q_values - target_q
                 loss = (weights * self.loss_fn(q_values, target_q)).mean()
-
 
             self.optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
+
             td_errors = td_error.detach().cpu().numpy().squeeze()
             self.replay_buffer.update_priorities(indices, td_errors)
+
 
 
 
@@ -221,6 +232,8 @@ class DQNAgent:
                 next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
                 next_q = self.target_net(next_states).gather(1, next_actions)
                 target_q = rewards + self.gamma * next_q * (1 - dones)
+                target_q = torch.clamp(target_q, -5.0, 5.0)
+
 
             td_error = q_values - target_q
             loss = (weights * self.loss_fn(q_values, target_q)).mean()

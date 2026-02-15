@@ -79,6 +79,12 @@ class TrainingController:
     # -------------------------------------------------
 
     def _compute_epsilon(self, episode: int) -> float:
+
+        if hasattr(self, "_curriculum_boost_counter"):
+            if self._curriculum_boost_counter < self._curriculum_boost_episodes:
+                self._curriculum_boost_counter += 1
+                return 0.5
+
         if episode >= self.epsilon_decay_episodes:
             return self.epsilon_end
 
@@ -86,6 +92,7 @@ class TrainingController:
         return self.epsilon_start - decay_ratio * (
             self.epsilon_start - self.epsilon_end
         )
+
 
     # -------------------------------------------------
 
@@ -140,14 +147,20 @@ class TrainingController:
         # -----------------------------
         # Guardar modelos aislados
         # -----------------------------
+        # Guardar modelo final
         last_path = os.path.join(self.checkpoint_dir, "last_model.pth")
         self.agent.save(last_path)
 
-        best_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-        if not os.path.exists(best_path):
-            self.agent.save(best_path)
+        # Evaluar modelo final
+        evaluation_last = self._run_evaluation(last_path)
 
-        evaluation_results = self._run_evaluation(best_path)
+        # Usar siempre el modelo final como best_model en 2.5.6
+        best_path = os.path.join(self.checkpoint_dir, "best_model.pth")
+        self.agent.save(best_path)
+
+        evaluation_results = evaluation_last
+
+
         training_summary = self._build_training_summary()
 
         experiment_results = {
@@ -206,14 +219,23 @@ class TrainingController:
                 self._curriculum_cooldown = False
 
             if (
-                success_rate >= 0.70
+                success_rate >= 0.85 # Modelo 2.5.3
                 and self.env.curriculum_level < 3
                 and not self._curriculum_cooldown
             ):
                 new_level = self.env.curriculum_level + 1
                 self.env.set_curriculum_level(new_level)
 
-                self.epsilon_start = max(self.epsilon_end, 0.2)
+                # Reset priorities to avoid memory inertia
+                if hasattr(self.agent, "replay_buffer"):
+                    capacity = self.agent.replay_buffer.capacity
+                    from agents.dqn.replay_buffer import PrioritizedReplayBuffer
+                    self.agent.replay_buffer = PrioritizedReplayBuffer(capacity=capacity)
+
+
+                self._curriculum_boost_episodes = 200
+                self._curriculum_boost_counter = 0
+
 
                 self._curriculum_cooldown = True
                 print(f"[Curriculum] Subiendo a nivel {new_level}")
@@ -227,13 +249,9 @@ class TrainingController:
         if success_rate > self.best_success_rate:
             self.best_success_rate = success_rate
             self.no_improve_counter = 0
-
-            checkpoint_path = os.path.join(
-                self.checkpoint_dir, "best_model.pth"
-            )
-            self.agent.save(checkpoint_path)
         else:
             self.no_improve_counter += 1
+
 
         if success_rate >= self.success_threshold:
             print(

@@ -1,23 +1,23 @@
 {
   "experiment_id": "maze_dqn_v2_phase2_seed42",
-  "timestamp": "2026-02-15T02:58:12.831604",
+  "timestamp": "2026-02-15T18:03:49.814115",
   "training": {
-    "episodes": 3525,
-    "mean_reward": -2.7628970848009096,
-    "mean_length": 66.76539007092198,
-    "best_success_rate": 0.998,
+    "episodes": 5000,
+    "mean_reward": -0.4892227375221253,
+    "mean_length": 33.3522,
+    "best_success_rate": 1.0,
     "final_epsilon": 0.05
   },
   "evaluation": {
     "episodes": 100,
     "success_rate": 1.0,
-    "mean_reward": 1.6450004577636719,
+    "mean_reward": 1.632500171661377,
     "mean_length": 16.0,
-    "reward_std": 4.76837158203125e-07,
+    "reward_std": 1.1920928955078125e-07,
     "length_std": 0.0,
-    "reward_p25": 1.6449999809265137,
-    "reward_p50": 1.6449999809265137,
-    "reward_p75": 1.6449999809265137,
+    "reward_p25": 1.6325000524520874,
+    "reward_p50": 1.6325000524520874,
+    "reward_p75": 1.6325000524520874,
     "length_p25": 16.0,
     "length_p50": 16.0,
     "length_p75": 16.0

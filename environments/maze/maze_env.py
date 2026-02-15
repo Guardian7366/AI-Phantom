@@ -151,7 +151,7 @@ class MazeEnvironment:
             info["success"] = True
 
         if self.steps >= self.max_steps:
-            reward -= 0.75
+            reward -= 0.25 # Modelo 2.5.3
             done = True
 
         return self._get_state(), reward, done, info

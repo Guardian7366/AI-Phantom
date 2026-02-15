@@ -63,10 +63,12 @@ class PrioritizedReplayBuffer:
         )
 
     # -----------------------------------------------------
-
+    # Modelo 2.5.4
     def update_priorities(self, indices, td_errors):
         for idx, td in zip(indices, td_errors):
-            self.priorities[idx] = abs(float(td)) + 1e-6
+            clipped_td = min(abs(float(td)), 5.0)
+            self.priorities[idx] = clipped_td + 1e-6
+
 
     # -----------------------------------------------------
 
