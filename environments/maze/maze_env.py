@@ -138,12 +138,11 @@ class MazeEnvironment:
 
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
-        gamma = 0.99
         max_dist = self.height + self.width
 
         old_potential = -old_dist / max_dist
         new_potential = -new_dist / max_dist
-        reward += gamma * new_potential - old_potential
+        reward += new_potential - old_potential # Modelo 2.6.2
 
         if tuple(self.agent_pos) == self.goal:
             reward = 1.0

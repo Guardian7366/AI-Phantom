@@ -11,38 +11,45 @@ from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 # =====================================================
 # CNN DUELING DQN
 # =====================================================
-
+# Modelo 2.6
 class CNN_Dueling_DQN(nn.Module):
 
-    def __init__(self, state_shape: Tuple[int, int, int], action_dim: int):
+    def __init__(self, state_shape, action_dim):
         super().__init__()
 
         c, h, w = state_shape
 
-        self.conv = nn.Sequential(
-            nn.Conv2d(c, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+        # --- Convolución inicial ---
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(c, 64, kernel_size=3, padding=1),
             nn.ReLU(),
         )
 
+        # --- Residual Block 1 ---
+        self.res1 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+        )
 
+        # --- Residual Block 2 ---
+        self.res2 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+        )
 
-        conv_out_size = 128 * (h // 4) * (w // 4)
+        self.relu = nn.ReLU()
+
+        self.flatten = nn.Flatten()
+
+        conv_out_size = 64 * h * w
 
         self.fc = nn.Sequential(
-            nn.Flatten(),
             nn.Linear(conv_out_size, 256),
             nn.LayerNorm(256),
             nn.ReLU(),
-        )   
-
+        )
 
         self.value_stream = nn.Sequential(
             nn.Linear(256, 128),
@@ -57,7 +64,20 @@ class CNN_Dueling_DQN(nn.Module):
         )
 
     def forward(self, x):
-        x = self.conv(x)
+
+        x = self.conv1(x)
+
+        # Residual 1
+        identity = x
+        out = self.res1(x)
+        x = self.relu(out + identity)
+
+        # Residual 2
+        identity = x
+        out = self.res2(x)
+        x = self.relu(out + identity)
+
+        x = self.flatten(x)
         x = self.fc(x)
 
         value = self.value_stream(x)
@@ -65,6 +85,7 @@ class CNN_Dueling_DQN(nn.Module):
 
         q = value + advantage - advantage.mean(dim=1, keepdim=True)
         return q
+
 
 
 
@@ -99,6 +120,8 @@ class DQNAgent:
         update_frequency=update_frequency,
         device=device,
     )
+        self.n_step = 3
+        self.n_step_buffer = []
         self.beta_start = 0.4
         self.beta_frames = 200000
         self.state_dim = state_dim
@@ -162,9 +185,57 @@ class DQNAgent:
     def observe(self, state, action, reward, next_state, done):
         if not self.training:
             return
-        self.replay_buffer.push(state, action, reward, next_state, done)
+
+        self.n_step_buffer.append((state, action, reward, next_state, done))
+
+        if len(self.n_step_buffer) < self.n_step:
+            return
+
+        # Calcular n-step return
+        cumulative_reward = 0.0
+        for idx, (_, _, r, _, d) in enumerate(self.n_step_buffer):
+            cumulative_reward += (self.gamma ** idx) * r
+            if d:
+                break
+
+        first_state, first_action, _, _, _ = self.n_step_buffer[0]
+        last_next_state = self.n_step_buffer[-1][3]
+        last_done = self.n_step_buffer[-1][4]
+
+        self.replay_buffer.push(
+            first_state,
+            first_action,
+            cumulative_reward,
+            last_next_state,
+            last_done,
+        )
+
+        self.n_step_buffer.pop(0)
         self.step_counter += 1
 
+        if done:
+            while len(self.n_step_buffer) > 0:
+                cumulative_reward = 0.0
+                for idx, (_, _, r, _, d) in enumerate(self.n_step_buffer):
+                    cumulative_reward += (self.gamma ** idx) * r
+                    if d:
+                        break
+
+                first_state, first_action, _, _, _ = self.n_step_buffer[0]
+                last_next_state = self.n_step_buffer[-1][3]
+                last_done = self.n_step_buffer[-1][4]
+
+                self.replay_buffer.push(
+                    first_state,
+                    first_action,
+                    cumulative_reward,
+                    last_next_state,
+                    last_done,
+                )
+
+                self.n_step_buffer.pop(0)
+
+            self.n_step_buffer.clear()
 
     def update(self):
         if self.step_counter % self.update_frequency != 0:
@@ -206,8 +277,8 @@ class DQNAgent:
 
                 with torch.no_grad():
                     next_q = self.target_net(next_states).gather(1, next_actions)
-                    target_q = rewards + self.gamma * next_q * (1 - dones)
-                    target_q = torch.clamp(target_q, -5.0, 5.0)
+                    target_q = rewards + (self.gamma ** self.n_step) * next_q * (1 - dones)
+                    target_q = torch.clamp(target_q, -3.0, 3.0)
 
 
                 td_error = q_values - target_q
@@ -231,8 +302,8 @@ class DQNAgent:
             with torch.no_grad():
                 next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
                 next_q = self.target_net(next_states).gather(1, next_actions)
-                target_q = rewards + self.gamma * next_q * (1 - dones)
-                target_q = torch.clamp(target_q, -5.0, 5.0)
+                target_q = rewards + (self.gamma ** self.n_step) * next_q * (1 - dones)
+                target_q = torch.clamp(target_q, -3.0, 3.0)
 
 
             td_error = q_values - target_q
