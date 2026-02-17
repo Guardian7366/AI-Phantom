@@ -35,7 +35,12 @@ def parse_args():
 
 def validate_checkpoint_compatibility(agent: DQNAgent, checkpoint_path: str) -> bool:
     try:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            weights_only=True
+        )
+
 
         if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
             state_dict = checkpoint["model_state_dict"]
