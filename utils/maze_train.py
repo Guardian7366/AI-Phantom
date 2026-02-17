@@ -30,7 +30,7 @@ class MazeTrainingScreen:
         font_title,
         font_statsTitle,
         font_button,
-    ):
+):
         retro_font_path = os.path.join(FONTS_PATH, "RetroGaming.ttf")
 
         self.screen = screen

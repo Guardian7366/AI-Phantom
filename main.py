@@ -8,13 +8,14 @@ def main():
     pygame.init()
 
     current_screen = "start"
-    start_screen = StartScreen()
+    start_screen = StartScreen(None, False)
 
     while True:
 
         if current_screen == "start":
 
             result = start_screen.run()
+
 
             if result == "selection_menu":
 
@@ -40,8 +41,14 @@ def main():
             if result == "start":
                 current_screen = "start"
 
+                #Creation function must be called again to set the correct screen size when changed in settings
+                start_screen = StartScreen(
+                    selection_screen.screen,
+                    selection_screen.settings.fullscreen #Boolean value to define if the game is currently windowed or fullscreen
+                )
+
             elif result == "maze_train":
-                # instancia la pantalla de entrenamiento (reutilizando la misma surface y recursos)
+                # Maze Training insance (reuses surface and resources)
                 maze_train_screen = MazeTrainingScreen(
                     screen=selection_screen.screen,
                     settings=selection_screen.settings,
@@ -55,11 +62,32 @@ def main():
 
                 if train_result in ("selection", "back"):
                     current_screen = "selection"
+
+                    #Creation function must be called again to set the correct screen size when changed in maze_train settings
+                    selection_screen = SelectionMenuScreen(
+                    maze_train_screen.screen,
+                    maze_train_screen.click_sound,
+                    maze_train_screen.font_title,
+                    maze_train_screen.font_statsTitle,
+                    maze_train_screen.font_button,
+                    maze_train_screen.settings
+                )
+                    
                 elif train_result == "start":
                     current_screen = "start"
                 else:
-                    # por defecto volver al menu de selección
+                    #Return to selection screen as default
                     current_screen = "selection"
+
+                    #Creation function must be called again to set the correct screen size when changed in maze_train settings
+                    selection_screen = SelectionMenuScreen(
+                    maze_train_screen.screen,
+                    maze_train_screen.click_sound,
+                    maze_train_screen.font_title,
+                    maze_train_screen.font_statsTitle,
+                    maze_train_screen.font_button,
+                    maze_train_screen.settings
+                )
 
             else:
                 break
