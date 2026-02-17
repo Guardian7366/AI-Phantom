@@ -63,6 +63,7 @@ def run_experiment(config: dict, seed: int, experiment_id: str):
     controller = TrainingController(
         env=env,
         agent=agent,
+        config=config,
         num_episodes=config["training"]["num_episodes"],
         max_steps_per_episode=config["training"]["max_steps_per_episode"],
         epsilon_start=config["training"]["epsilon_start"],

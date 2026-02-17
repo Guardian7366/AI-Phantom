@@ -13,7 +13,7 @@ environment:
     - [0,0,0,0,1,1,0,0]
 
   random_start_goal: true
-  max_steps: 400
+  max_steps: 200 # Modelo 2.7.3
   render: false
 
 
@@ -22,7 +22,7 @@ environment:
 # -----------------------------------------
 evaluation:
   num_episodes: 200
-  max_steps_per_episode: 400
+  max_steps_per_episode: 200 # Modelo 2.7.3
   seed: 123
 
 

@@ -21,7 +21,7 @@ environment:
 
   randomize_grid: true # Modelo 2.5
   random_start_goal: true 
-  wall_probability: 0.10 # Modelo 2.5
+  wall_probability: 0.0 # Modelo 2.7.4 para que inicie facil y luego incremente
   max_steps: 200
 
 
@@ -33,14 +33,14 @@ training:
   max_steps_per_episode: 200
 
   epsilon_start: 1.0
-  epsilon_end: 0.05  # modelo 2.5.1
-  epsilon_decay_episodes: 2000 #  modelo 2.5.3
+  epsilon_end: 0.1  # modelo 2.7.8
+  epsilon_decay_episodes: 3500  #  modelo 2.7.5
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
 
   early_stopping_patience: null
-  success_threshold: 1.1   # modelo 2.5.3
+  success_threshold: null  # modelo 2.7.4
   success_window: 500 # modelo 2.5.2
 
 
@@ -55,5 +55,5 @@ agent:
   replay_buffer_size: 50000     #  modelo 2.5.4
   min_replay_size: 5000 # modelo 2.5.4
 
-  tau: 0.001                   #  modelo 2.5.4
+  tau: 0.005                  #  modelo 2.7.3
   update_frequency: 4             #  modelo 2.5.4

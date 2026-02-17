@@ -41,9 +41,12 @@ class CNN_Dueling_DQN(nn.Module):
 
         self.relu = nn.ReLU()
 
+        # Adaptive pooling para mejorar generalización espacial
+        self.pool = nn.AdaptiveAvgPool2d((4, 4))
+
         self.flatten = nn.Flatten()
 
-        conv_out_size = 64 * h * w
+        conv_out_size = 64 * 4 * 4
 
         self.fc = nn.Sequential(
             nn.Linear(conv_out_size, 256),
@@ -76,7 +79,8 @@ class CNN_Dueling_DQN(nn.Module):
         identity = x
         out = self.res2(x)
         x = self.relu(out + identity)
-
+        
+        x = self.pool(x) # Modelo 2.7.0
         x = self.flatten(x)
         x = self.fc(x)
 
@@ -120,7 +124,7 @@ class DQNAgent:
         update_frequency=update_frequency,
         device=device,
     )
-        self.n_step = 3
+        self.n_step = 1 # Modelo 2.7.8
         self.n_step_buffer = []
         self.beta_start = 0.4
         self.beta_frames = 200000
@@ -278,11 +282,11 @@ class DQNAgent:
                 with torch.no_grad():
                     next_q = self.target_net(next_states).gather(1, next_actions)
                     target_q = rewards + (self.gamma ** self.n_step) * next_q * (1 - dones)
-                    target_q = torch.clamp(target_q, -3.0, 3.0)
 
 
                 td_error = q_values - target_q
                 loss = (weights * self.loss_fn(q_values, target_q)).mean()
+ 
 
             self.optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(loss).backward()
@@ -290,7 +294,7 @@ class DQNAgent:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            td_errors = td_error.detach().cpu().numpy().squeeze()
+            td_errors = td_error.detach().cpu().numpy().reshape(-1) # Modelo 2.7.7
             self.replay_buffer.update_priorities(indices, td_errors)
 
 
@@ -303,18 +307,15 @@ class DQNAgent:
                 next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
                 next_q = self.target_net(next_states).gather(1, next_actions)
                 target_q = rewards + (self.gamma ** self.n_step) * next_q * (1 - dones)
-                target_q = torch.clamp(target_q, -3.0, 3.0)
-
 
             td_error = q_values - target_q
             loss = (weights * self.loss_fn(q_values, target_q)).mean()
-
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.optimizer.step()
-            td_errors = td_error.detach().cpu().numpy().squeeze()
+            td_errors = td_error.detach().cpu().numpy().reshape(-1) # Modelo 2.7.7
             self.replay_buffer.update_priorities(indices, td_errors)
 
         # ------------------------------
@@ -335,10 +336,21 @@ class DQNAgent:
         torch.save(self.policy_net.state_dict(), path)
 
     def load(self, path: str):
-        self.policy_net.load_state_dict(
-            torch.load(path, map_location=self.device, weights_only=True)
+        checkpoint = torch.load(
+            path,
+            map_location=self.device,
+            weights_only=True
         )
+
+
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+        else:
+            state_dict = checkpoint
+
+        self.policy_net.load_state_dict(state_dict)
         self.target_net.load_state_dict(self.policy_net.state_dict())
+
 
     def _beta_by_frame(self):
         return min(

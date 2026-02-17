@@ -20,6 +20,7 @@ class TrainingController:
         env : MazeEnvironment,
         agent,
         num_episodes: int,
+        config: Dict[str, Any],
         max_steps_per_episode: int,
         epsilon_start: float = 1.0,
         epsilon_end: float = 0.05,
@@ -34,7 +35,7 @@ class TrainingController:
     ):
         self.env = env
         self.agent = agent
-
+        self.config = config
         self.num_episodes = num_episodes
         self.max_steps = max_steps_per_episode
 
@@ -230,7 +231,10 @@ class TrainingController:
                 if hasattr(self.agent, "replay_buffer"):
                     capacity = self.agent.replay_buffer.capacity
                     from agents.dqn.replay_buffer import PrioritizedReplayBuffer
-                    self.agent.replay_buffer = PrioritizedReplayBuffer(capacity=capacity)
+                    # Reset suave de prioridades pero mantener experiencias # Modelo 2.7.1
+                    if hasattr(self.agent.replay_buffer, "priorities"):
+                        self.agent.replay_buffer.priorities *= 0.5
+
 
 
                 self._curriculum_boost_episodes = 200
@@ -253,12 +257,19 @@ class TrainingController:
             self.no_improve_counter += 1
 
 
-        if success_rate >= self.success_threshold:
+        # -----------------------------
+        # Early stop por success rate
+        # -----------------------------
+        if (
+            self.success_threshold is not None
+            and success_rate >= self.success_threshold
+        ):
             print(
                 f"[Early Stop] Success rate alcanzado: "
                 f"{success_rate:.3f} en episodio {episode}"
             )
             return True
+
 
         if self.early_stopping_patience is not None:
             if self.no_improve_counter >= self.early_stopping_patience:
@@ -277,9 +288,15 @@ class TrainingController:
         evaluator = EvaluationController(
             env_factory=self.env.factory,
             agent_factory=self.agent.factory,
-            config=self.env.config,
+            config=self.config,
         )
-        return evaluator.evaluate_checkpoint(checkpoint_path)
+
+        final_level = getattr(self.env, "curriculum_level", 0)
+
+        return evaluator.evaluate_checkpoint(
+            checkpoint_path,
+            forced_curriculum_level=final_level,
+        )
 
     # -------------------------------------------------
 
@@ -292,4 +309,6 @@ class TrainingController:
             "final_epsilon": self.epsilon_history[-1]
             if self.epsilon_history
             else 0.0,
+            "final_curriculum_level": getattr(self.env, "curriculum_level", 0),
         }
+

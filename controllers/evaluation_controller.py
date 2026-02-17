@@ -5,7 +5,8 @@ from typing import Dict, Any, Callable, List
 class EvaluationController:
     """
     Controlador de evaluación cuantitativa.
-    Ejescuta episodios deterministas usando factories para reproducibilidad.
+    Ejecuta episodios deterministas usando factories para reproducibilidad.
+    Permite forzar nivel de curriculum para evitar environment mismatch.
     """
 
     def __init__(
@@ -28,25 +29,37 @@ class EvaluationController:
     # API pública
     # -------------------------------------------------
 
-    def evaluate_checkpoint(self, checkpoint_path: str) -> Dict[str, Any]:
-        """
-        Ejecuta evaluación del modelo guardado en checkpoint_path.
-        """
+    def evaluate_checkpoint(
+        self,
+        checkpoint_path: str,
+        forced_curriculum_level: int | None = None,
+    ) -> Dict[str, Any]:
 
         if self.seed is not None:
             import random
+            import torch
+
             np.random.seed(self.seed)
             random.seed(self.seed)
-            
-        env = self.env_factory()
-        agent = self.agent_factory()
+            torch.manual_seed(self.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(self.seed)
 
+        # 🔹 Crear environment correctamente
+        env = self.env_factory()
+
+        # 🔹 Forzar curriculum si se especifica
+        if forced_curriculum_level is not None:
+            if hasattr(env, "set_curriculum_level"):
+                env.set_curriculum_level(forced_curriculum_level)
+
+        agent = self.agent_factory()
         agent.set_mode(training=False)
         agent.load(checkpoint_path)
 
-        episode_rewards: List[float] = []
-        episode_lengths: List[int] = []
-        successes: List[int] = []
+        episode_rewards = []
+        episode_lengths = []
+        successes = []
 
         for _ in range(self.num_episodes):
             state = env.reset()
@@ -55,8 +68,8 @@ class EvaluationController:
             success = False
 
             for step in range(self.max_steps):
-                action = agent.select_action(state, epsilon=0.0)
-
+                action = agent.select_action(state, epsilon=0.1) # Modelo 2.7.8
+                
                 next_state, reward, done, info = env.step(action)
 
                 episode_reward += reward
@@ -75,6 +88,7 @@ class EvaluationController:
             episode_lengths,
             successes,
         )
+
 
     # -------------------------------------------------
     # Helpers

@@ -34,13 +34,22 @@ def parse_args():
 # -------------------------------------------------
 
 def validate_checkpoint_compatibility(agent: DQNAgent, checkpoint_path: str) -> bool:
-    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-
     try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+        else:
+            state_dict = checkpoint
+
         agent.policy_net.load_state_dict(state_dict, strict=True)
         return True
-    except Exception:
+
+    except Exception as e:
+        print(f"[SKIP] Incompatible ({e}): {checkpoint_path}")
         return False
+
+
 
 
 
@@ -56,6 +65,19 @@ def main():
 
     env_cfg = config["environment"]
     paths_cfg = config["paths"]
+    full_config = config
+    
+    # -------------------------------------------------
+    # Seed global para reproducibilidad
+    # -------------------------------------------------
+
+    eval_seed = config.get("evaluation", {}).get("seed", None)
+
+    if eval_seed is not None:
+        torch.manual_seed(eval_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(eval_seed)
+
 
     checkpoint_dir = paths_cfg["checkpoint_dir"]
     results_path = paths_cfg["results_path"]
@@ -82,44 +104,45 @@ def main():
 
     for ckpt_path in checkpoint_files:
 
+        # -------------------------------------------------
+        # Crear entorno base una sola vez
+        # -------------------------------------------------
 
-        # -------------------------------------------------
-        # Factories (DISEÑO CORRECTO)
-        # -------------------------------------------------
+        base_env = MazeEnvironment(env_cfg)
 
         def env_factory():
             return MazeEnvironment(env_cfg)
 
         def agent_factory():
-            temp_env = MazeEnvironment(env_cfg)
             replay_buffer = PrioritizedReplayBuffer(capacity=1)
 
             return DQNAgent(
-                state_dim=temp_env.state_dim,
-                action_dim=temp_env.action_space_n,
+                state_dim=base_env.state_dim,
+                action_dim=base_env.action_space_n,
                 replay_buffer=replay_buffer,
             )
 
-        # Instancia temporal SOLO para validar shapes
-        temp_env = MazeEnvironment(env_cfg)
+        # -------------------------------------------------
+        # Validación de compatibilidad
+        # -------------------------------------------------
+
         temp_agent = DQNAgent(
-            state_dim=temp_env.state_dim,
-            action_dim=temp_env.action_space_n,
+            state_dim=base_env.state_dim,
+            action_dim=base_env.action_space_n,
             replay_buffer=PrioritizedReplayBuffer(capacity=1),
         )
 
         if not validate_checkpoint_compatibility(temp_agent, ckpt_path):
-            print(f"[SKIP] Checkpoint incompatible: {ckpt_path}")
             continue
 
         # -------------------------------------------------
-        # Evaluación limpia basada en factories
+        # Evaluación
         # -------------------------------------------------
 
         evaluator = EvaluationController(
             env_factory=env_factory,
             agent_factory=agent_factory,
-            config=env_cfg,
+            config=full_config,
         )
 
         summary = evaluator.evaluate_checkpoint(ckpt_path)

@@ -32,9 +32,10 @@ class PrioritizedReplayBuffer:
         else:
             prios = self.priorities[:len(self.buffer)]
 
-        # --- Probabilidades ---
-        probs = prios ** self.alpha
+        # --- Probabilidades --- } # Modelo 2.7.7
+        probs = np.power(prios + 1e-8, self.alpha)
         prob_sum = probs.sum()
+
 
         # Evitar división por cero
         if prob_sum == 0:
@@ -62,15 +63,13 @@ class PrioritizedReplayBuffer:
             np.array(weights, dtype=np.float32),
         )
 
-    # -----------------------------------------------------
-    # Modelo 2.5.4
+    # Modelo 2.7.3
     def update_priorities(self, indices, td_errors):
         for idx, td in zip(indices, td_errors):
-            clipped_td = min(abs(float(td)), 5.0)
-            self.priorities[idx] = clipped_td + 1e-6
+            new_priority = abs(float(td)) + 1e-6
+            self.priorities[idx] = 0.9 * self.priorities[idx] + 0.1 * min(new_priority, 10.0)
 
 
-    # -----------------------------------------------------
 
     def __len__(self):
         return len(self.buffer)

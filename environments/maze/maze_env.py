@@ -23,6 +23,10 @@ class MazeEnvironment:
 
         self.max_steps = config.get("max_steps", 500)
 
+        self.randomize_grid = config.get("randomize_grid", False)
+        self.random_start_goal = config.get("random_start_goal", False)
+        self.wall_probability = config.get("wall_probability", 0.0)
+
         # Curriculum level
         self.curriculum_level = 0
 
@@ -46,6 +50,7 @@ class MazeEnvironment:
         self.curriculum_level = level
 
     def _apply_curriculum(self):
+
         if self.curriculum_level == 0:
             self.randomize_grid = False
             self.random_start_goal = False
@@ -54,9 +59,14 @@ class MazeEnvironment:
         elif self.curriculum_level == 1:
             self.randomize_grid = False
             self.random_start_goal = True
-            self.wall_probability = 0.05
+            self.wall_probability = 0.03
 
         elif self.curriculum_level == 2:
+            self.randomize_grid = True
+            self.random_start_goal = True
+            self.wall_probability = 0.05
+
+        elif self.curriculum_level == 3:
             self.randomize_grid = True
             self.random_start_goal = True
             self.wall_probability = 0.08
@@ -64,7 +74,9 @@ class MazeEnvironment:
         else:
             self.randomize_grid = True
             self.random_start_goal = True
-            self.wall_probability = 0.12
+            self.wall_probability = 0.10
+
+
 
     # ======================================================
 
@@ -75,6 +87,43 @@ class MazeEnvironment:
                 if random.random() < self.wall_probability:
                     grid[i, j] = 1
         return grid
+    
+    # ======================================================
+    # Connectivity Check (Modelo 2.7.2)
+    # ======================================================
+
+    def _is_reachable(self, grid, start, goal):
+        from collections import deque
+
+        if grid[start[0], start[1]] == 1:
+            return False
+        if grid[goal[0], goal[1]] == 1:
+            return False
+
+        visited = np.zeros_like(grid, dtype=bool)
+        queue = deque([start])
+        visited[start[0], start[1]] = True
+
+        while queue:
+            x, y = queue.popleft()
+
+            if (x, y) == goal:
+                return True
+
+            for dx, dy in self.ACTIONS.values():
+                nx, ny = x + dx, y + dy
+
+                if (
+                    0 <= nx < self.height
+                    and 0 <= ny < self.width
+                    and not visited[nx, ny]
+                    and grid[nx, ny] == 0
+                ):
+                    visited[nx, ny] = True
+                    queue.append((nx, ny))
+
+        return False
+
 
     def _sample_free_cell(self):
         while True:
@@ -83,23 +132,47 @@ class MazeEnvironment:
             if self.grid[x, y] == 0:
                 return (x, y)
 
-    # ======================================================
-
     def reset(self):
         self._apply_curriculum()
         self.steps = 0
 
-        if self.randomize_grid:
-            self.grid = self._generate_random_grid()
-        else:
-            self.grid = self.base_grid.copy()
+        # --------------------------------------------------
+        # Generación de grid garantizando conectividad
+        # --------------------------------------------------
+        max_attempts = 50
 
-        if self.random_start_goal:
-            self.start = self._sample_free_cell()
-            self.goal = self._sample_free_cell()
-            while self.goal == self.start:
-                self.goal = self._sample_free_cell()
+        for _ in range(max_attempts):
+
+            if self.randomize_grid:
+                candidate_grid = self._generate_random_grid()
+            else:
+                candidate_grid = self.base_grid.copy()
+
+            if self.random_start_goal:
+                free_cells = np.argwhere(candidate_grid == 0)
+                if len(free_cells) < 2:
+                    continue
+
+                start_idx = random.randint(0, len(free_cells) - 1)
+                goal_idx = random.randint(0, len(free_cells) - 1)
+
+                start = tuple(free_cells[start_idx])
+                goal = tuple(free_cells[goal_idx])
+
+                if start == goal:
+                    continue
+            else:
+                start = (0, 0)
+                goal = (self.height - 1, self.width - 1)
+
+            if self._is_reachable(candidate_grid, start, goal):
+                self.grid = candidate_grid
+                self.start = start
+                self.goal = goal
+                break
         else:
+            # Fallback seguro
+            self.grid = self.base_grid.copy()
             self.start = (0, 0)
             self.goal = (self.height - 1, self.width - 1)
 
@@ -110,7 +183,6 @@ class MazeEnvironment:
 
         return self._get_state()
 
-    # ======================================================
 
     def step(self, action: int):
         self.steps += 1
@@ -142,10 +214,11 @@ class MazeEnvironment:
 
         old_potential = -old_dist / max_dist
         new_potential = -new_dist / max_dist
-        reward += new_potential - old_potential # Modelo 2.6.2
+        reward += 0.05 * (new_potential - old_potential) # Modelo 2.7.4
+
 
         if tuple(self.agent_pos) == self.goal:
-            reward = 1.0
+            reward = 5.0 # Modelo 2.7.8
             done = True
             info["success"] = True
 
