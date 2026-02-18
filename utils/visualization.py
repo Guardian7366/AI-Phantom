@@ -119,13 +119,21 @@ class Icon_Button:
 
 class StartScreen:
 
-    def __init__(self):
+    def __init__(self, screen, fullscreen):
         # Audio config
         self.settings = SettingsState()
         self.clock = pygame.time.Clock()
-        self.settings.fullscreen = False
 
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        if fullscreen != None:
+            self.settings.fullscreen = fullscreen
+        else:
+            self.settings.fullscreen = False
+
+        if screen != None:
+            self.screen = screen
+        else:
+            self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT)) #Define default screen mode and size
+
         pygame.display.set_caption("AI Phantom")
 
         self.running = True
