@@ -1,4 +1,4 @@
-experiment_name: maze_dqn_v2_phase2
+experiment_name: maze_dqn_v2_phase2_revival
 
 seeds:
   - 42
@@ -19,41 +19,49 @@ environment:
     - [0,1,0,1,0,0,0,0]
     - [0,0,0,0,1,1,0,0]
 
-  randomize_grid: true # Modelo 2.5
-  random_start_goal: true 
-  wall_probability: 0.0 # Modelo 2.7.4 para que inicie facil y luego incremente
-  max_steps: 200
+  randomize_grid: true
+  random_start_goal: true
+  wall_probability: 0.0
+  max_steps: 120
 
 
 # -----------------------------------------
 # Training
 # -----------------------------------------
 training:
-  num_episodes: 5000 # 2.5.3
-  max_steps_per_episode: 200
+  num_episodes: 3500
+  max_steps_per_episode: 120
 
   epsilon_start: 1.0
-  epsilon_end: 0.1  # modelo 2.7.8
-  epsilon_decay_episodes: 3500  #  modelo 2.7.5
+  epsilon_end: 0.05
+  epsilon_decay_episodes: 2500   # más lento
 
   checkpoint_dir: results/checkpoints
   results_dir: results/runs
 
   early_stopping_patience: null
-  success_threshold: null  # modelo 2.7.4
-  success_window: 500 # modelo 2.5.2
+  success_threshold: null
+  success_window: 200            # antes 500
 
 
 # -----------------------------------------
 # Agent
 # -----------------------------------------
 agent:
-  gamma: 0.99 # Modelo 2.5.4
-  learning_rate: 0.00015 # modelo 2.5.4
+  gamma: 0.99
+  learning_rate: 0.0003
 
-  batch_size: 128              #  modelo 2.5.4
-  replay_buffer_size: 50000     #  modelo 2.5.4
-  min_replay_size: 5000 # modelo 2.5.4
+  batch_size: 64
+  replay_buffer_size: 20000      # antes 30000
+  min_replay_size: 1500          # más warmup
 
-  tau: 0.005                  #  modelo 2.7.3
-  update_frequency: 4             #  modelo 2.5.4
+  tau: 0.005
+  update_frequency: 4
+
+  # -------------------------------------
+  # Prioritized Experience Replay
+  # -------------------------------------
+  use_per: true
+  per_alpha: 0.6
+  per_beta_start: 0.4
+  per_beta_frames: 300000

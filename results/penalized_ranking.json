@@ -1,28 +1,35 @@
 [
   {
-    "experiment_id": "maze_dqn_v2_phase2_seed123",
-    "score": 1.0,
-    "eval_success": 1.0,
-    "mean_reward": 4.93,
-    "mean_length": 6.34,
-    "penalties": []
-  },
-  {
-    "experiment_id": "maze_dqn_v2_phase2_seed42",
-    "score": 0.99,
-    "eval_success": 0.99,
-    "mean_reward": 4.66,
-    "mean_length": 7.73,
-    "penalties": []
-  },
-  {
-    "experiment_id": "maze_dqn_v2_phase2_seed999",
-    "score": 0.74,
-    "eval_success": 0.94,
-    "mean_reward": 3.27,
-    "mean_length": 17.17,
+    "experiment_id": "maze_dqn_v2_phase2_revival_seed123",
+    "score": 0.0,
+    "eval_success": 0.12,
+    "mean_reward": 2.63,
+    "mean_length": 108.04,
     "penalties": [
-      "INEFFICIENT"
+      "OVERFIT",
+      "REWARD_HACK"
+    ]
+  },
+  {
+    "experiment_id": "maze_dqn_v2_phase2_revival_seed42",
+    "score": 0.0,
+    "eval_success": 0.35,
+    "mean_reward": 7.4,
+    "mean_length": 84.29,
+    "penalties": [
+      "OVERFIT",
+      "REWARD_HACK"
+    ]
+  },
+  {
+    "experiment_id": "maze_dqn_v2_phase2_revival_seed999",
+    "score": 0.0,
+    "eval_success": 0.25,
+    "mean_reward": 2.71,
+    "mean_length": 92.83,
+    "penalties": [
+      "OVERFIT",
+      "REWARD_HACK"
     ]
   }
 ]

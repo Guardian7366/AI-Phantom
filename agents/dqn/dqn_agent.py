@@ -1,5 +1,5 @@
 import random
-from typing import Optional, Callable, Tuple
+from typing import Optional, Tuple, Callable
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,126 +8,88 @@ import torch.optim as optim
 from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
 
-# =====================================================
-# CNN DUELING DQN
-# =====================================================
-# Modelo 2.6
+# ============================================================
+# NETWORK: CNN + DUELING (Optimizada para Maze 8x8)
+# ============================================================
+
 class CNN_Dueling_DQN(nn.Module):
 
-    def __init__(self, state_shape, action_dim):
+    def __init__(self, state_shape: Tuple[int, int, int], action_dim: int):
         super().__init__()
 
         c, h, w = state_shape
 
-        # --- Convolución inicial ---
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(c, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
+        self.features = nn.Sequential(
+            nn.Conv2d(c, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
         )
-
-        # --- Residual Block 1 ---
-        self.res1 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-        )
-
-        # --- Residual Block 2 ---
-        self.res2 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-        )
-
-        self.relu = nn.ReLU()
-
-        # Adaptive pooling para mejorar generalización espacial
-        self.pool = nn.AdaptiveAvgPool2d((4, 4))
 
         self.flatten = nn.Flatten()
 
-        conv_out_size = 64 * 4 * 4
+        conv_out = 32 * h * w
 
-        self.fc = nn.Sequential(
-            nn.Linear(conv_out_size, 256),
-            nn.LayerNorm(256),
-            nn.ReLU(),
+        self.shared_fc = nn.Sequential(
+            nn.Linear(conv_out, 128),
+            nn.ReLU(inplace=True),
         )
 
+        # Value stream
         self.value_stream = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 1),
         )
 
+        # Advantage stream
         self.advantage_stream = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, action_dim),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, action_dim),
         )
 
-    def forward(self, x):
+        self._init_weights()
 
-        x = self.conv1(x)
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
-        # Residual 1
-        identity = x
-        out = self.res1(x)
-        x = self.relu(out + identity)
-
-        # Residual 2
-        identity = x
-        out = self.res2(x)
-        x = self.relu(out + identity)
-        
-        x = self.pool(x) # Modelo 2.7.0
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
         x = self.flatten(x)
-        x = self.fc(x)
+        x = self.shared_fc(x)
 
         value = self.value_stream(x)
         advantage = self.advantage_stream(x)
 
-        q = value + advantage - advantage.mean(dim=1, keepdim=True)
-        return q
+        return value + advantage - advantage.mean(dim=1, keepdim=True)
 
 
-
-
-# =====================================================
+# ============================================================
 # AGENT
-# =====================================================
+# ============================================================
 
 class DQNAgent:
 
     def __init__(
         self,
-        state_dim,
+        state_dim: Tuple[int, int, int],
         action_dim: int,
         replay_buffer: PrioritizedReplayBuffer,
         gamma: float = 0.99,
-        lr: float = 1e-4,
+        lr: float = 3e-4,
         batch_size: int = 64,
-        min_replay_size: int = 1000,
+        min_replay_size: int = 2000,
         tau: float = 0.005,
         update_frequency: int = 4,
+        n_step: int = 3,
         device: Optional[str] = None
     ):
 
-        self._init_params = dict(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        gamma=gamma,
-        lr=lr,
-        batch_size=batch_size,
-        min_replay_size=min_replay_size,
-        tau=tau,
-        update_frequency=update_frequency,
-        device=device,
-    )
-        self.n_step = 1 # Modelo 2.7.8
-        self.n_step_buffer = []
-        self.beta_start = 0.4
-        self.beta_frames = 200000
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.replay_buffer = replay_buffer
@@ -137,40 +99,69 @@ class DQNAgent:
         self.min_replay_size = min_replay_size
         self.tau = tau
         self.update_frequency = update_frequency
-        self.step_counter = 0
-
+        self.n_step = n_step
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-        # ------------------------------
-        # AMP GradScaler initialization
-        # ------------------------------
-        if self.device == "cuda":
-            self.scaler = torch.amp.GradScaler("cuda")
-        else:
-            self.scaler = None
-
+        # Networks
         self.policy_net = CNN_Dueling_DQN(state_dim, action_dim).to(self.device)
         self.target_net = CNN_Dueling_DQN(state_dim, action_dim).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.loss_fn = nn.SmoothL1Loss(reduction='none')
+        # Optimizer
+        self.optimizer = optim.Adam(
+            self.policy_net.parameters(),
+            lr=lr,
+            weight_decay=1e-5
+        )
 
+        self.loss_fn = nn.SmoothL1Loss(reduction="none")
+
+        # AMP
+        self.use_amp = self.device == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda") if self.use_amp else None
+
+        # Training state
         self.training = True
+        self.step_counter = 0
+        self.n_step_buffer = []
+
+        # Prioritized replay beta schedule
+        self.beta_start = 0.4
+        self.beta_frames = 300_000
 
         self.factory: Callable[[], "DQNAgent"] = self._build_factory
 
-    def _build_factory(self):
-        replay_buffer = PrioritizedReplayBuffer(capacity=1)
-        agent = DQNAgent(replay_buffer=replay_buffer, **self._init_params)
-        agent.set_mode(False)
-        return agent
+    # ============================================================
+    # MODE CONTROL
+    # ============================================================
 
     def set_mode(self, training: bool):
         self.training = training
         self.policy_net.train(training)
+
+    def _build_factory(self):
+        buffer = PrioritizedReplayBuffer(capacity=1)
+        agent = DQNAgent(
+            state_dim=self.state_dim,
+            action_dim=self.action_dim,
+            replay_buffer=buffer,
+            gamma=self.gamma,
+            lr=self.optimizer.param_groups[0]['lr'],
+            batch_size=self.batch_size,
+            min_replay_size=self.min_replay_size,
+            tau=self.tau,
+            update_frequency=self.update_frequency,
+            n_step=self.n_step,
+            device=self.device
+        )
+        agent.set_mode(False)
+        return agent
+
+    # ============================================================
+    # ACTION SELECTION
+    # ============================================================
 
     def select_action(self, state: np.ndarray, epsilon: float = 0.0) -> int:
 
@@ -186,7 +177,12 @@ class DQNAgent:
 
         return int(torch.argmax(q_values, dim=1).item())
 
+    # ============================================================
+    # EXPERIENCE COLLECTION (N-STEP)
+    # ============================================================
+
     def observe(self, state, action, reward, next_state, done):
+
         if not self.training:
             return
 
@@ -195,98 +191,72 @@ class DQNAgent:
         if len(self.n_step_buffer) < self.n_step:
             return
 
-        # Calcular n-step return
         cumulative_reward = 0.0
         for idx, (_, _, r, _, d) in enumerate(self.n_step_buffer):
             cumulative_reward += (self.gamma ** idx) * r
             if d:
                 break
 
-        first_state, first_action, _, _, _ = self.n_step_buffer[0]
-        last_next_state = self.n_step_buffer[-1][3]
-        last_done = self.n_step_buffer[-1][4]
+        first_state, first_action = self.n_step_buffer[0][:2]
+        last_next_state, last_done = self.n_step_buffer[-1][3:5]
 
         self.replay_buffer.push(
             first_state,
             first_action,
             cumulative_reward,
             last_next_state,
-            last_done,
+            last_done
         )
 
         self.n_step_buffer.pop(0)
         self.step_counter += 1
 
         if done:
-            while len(self.n_step_buffer) > 0:
-                cumulative_reward = 0.0
-                for idx, (_, _, r, _, d) in enumerate(self.n_step_buffer):
-                    cumulative_reward += (self.gamma ** idx) * r
-                    if d:
-                        break
-
-                first_state, first_action, _, _, _ = self.n_step_buffer[0]
-                last_next_state = self.n_step_buffer[-1][3]
-                last_done = self.n_step_buffer[-1][4]
-
-                self.replay_buffer.push(
-                    first_state,
-                    first_action,
-                    cumulative_reward,
-                    last_next_state,
-                    last_done,
-                )
-
-                self.n_step_buffer.pop(0)
-
             self.n_step_buffer.clear()
 
+    # ============================================================
+    # UPDATE STEP (Double DQN + PER)
+    # ============================================================
+
     def update(self):
-        if self.step_counter % self.update_frequency != 0:
-            return None
 
         if not self.training:
+            return None
+
+        if self.step_counter % self.update_frequency != 0:
             return None
 
         if len(self.replay_buffer) < max(self.batch_size, self.min_replay_size):
             return None
 
-        beta = self._beta_by_frame()
+        beta = min(
+            1.0,
+            self.beta_start +
+            (1.0 - self.beta_start) *
+            (self.step_counter / self.beta_frames)
+        )
+
         states, actions, rewards, next_states, dones, indices, weights = \
             self.replay_buffer.sample(self.batch_size, beta)
 
-
+        states = torch.from_numpy(states).to(self.device)
+        actions = torch.from_numpy(actions).long().to(self.device).unsqueeze(1)
+        rewards = torch.from_numpy(rewards).to(self.device).unsqueeze(1)
+        next_states = torch.from_numpy(next_states).to(self.device)
+        dones = torch.from_numpy(dones).to(self.device).unsqueeze(1)
         weights = torch.from_numpy(weights).to(self.device).unsqueeze(1)
 
-        states = torch.from_numpy(states).to(self.device, non_blocking=True)
-        actions = torch.from_numpy(actions).long().to(self.device, non_blocking=True).unsqueeze(1)
-        rewards = torch.from_numpy(rewards).to(self.device, non_blocking=True).unsqueeze(1)
-        next_states = torch.from_numpy(next_states).to(self.device, non_blocking=True)
-        dones = torch.from_numpy(dones).to(self.device, non_blocking=True).unsqueeze(1)
+        # Double DQN
+        with torch.no_grad():
+            next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
+            next_q = self.target_net(next_states).gather(1, next_actions)
+            target_q = rewards + self.gamma * next_q * (1 - dones)
 
-
-        # ------------------------------
-        # Mixed Precision Training
-        # ------------------------------
-        use_amp = self.device == "cuda"
-
-        # Modelo 2.5.4
-        if use_amp:
-
-            with torch.no_grad():
-                next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
-
+        if self.use_amp:
             with torch.amp.autocast("cuda"):
-                q_values = self.policy_net(states).gather(1, actions)
-
-                with torch.no_grad():
-                    next_q = self.target_net(next_states).gather(1, next_actions)
-                    target_q = rewards + (self.gamma ** self.n_step) * next_q * (1 - dones)
-
-
-                td_error = q_values - target_q
-                loss = (weights * self.loss_fn(q_values, target_q)).mean()
- 
+                current_q = self.policy_net(states).gather(1, actions)
+                loss_elements = self.loss_fn(current_q, target_q)
+                loss = (weights * loss_elements).mean()
 
             self.optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(loss).backward()
@@ -294,68 +264,50 @@ class DQNAgent:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            td_errors = td_error.detach().cpu().numpy().reshape(-1) # Modelo 2.7.7
-            self.replay_buffer.update_priorities(indices, td_errors)
-
-
-
-
         else:
-            q_values = self.policy_net(states).gather(1, actions)
-
-            with torch.no_grad():
-                next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
-                next_q = self.target_net(next_states).gather(1, next_actions)
-                target_q = rewards + (self.gamma ** self.n_step) * next_q * (1 - dones)
-
-            td_error = q_values - target_q
-            loss = (weights * self.loss_fn(q_values, target_q)).mean()
+            current_q = self.policy_net(states).gather(1, actions)
+            loss_elements = self.loss_fn(current_q, target_q)
+            loss = (weights * loss_elements).mean()
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
             self.optimizer.step()
-            td_errors = td_error.detach().cpu().numpy().reshape(-1) # Modelo 2.7.7
-            self.replay_buffer.update_priorities(indices, td_errors)
 
-        # ------------------------------
-        # Soft target update
-        # ------------------------------
+        # Update priorities
+        td_errors = (current_q - target_q).detach().abs().cpu().numpy().flatten()
+        td_errors = np.clip(td_errors, 1e-6, 10.0)
+        self.replay_buffer.update_priorities(indices, td_errors)
+
+        self._soft_update()
+
+        return float(loss.item())
+
+    # ============================================================
+    # TARGET UPDATE
+    # ============================================================
+
+    def _soft_update(self):
         for target_param, policy_param in zip(
             self.target_net.parameters(),
             self.policy_net.parameters()
         ):
-            target_param.data.mul_(1.0 - self.tau)
-            target_param.data.add_(self.tau * policy_param.data)
+            target_param.data.copy_(
+                target_param.data * (1.0 - self.tau) +
+                policy_param.data * self.tau
+            )
 
-        return float(loss.item())
-
-   
+    # ============================================================
+    # SAVE / LOAD
+    # ============================================================
 
     def save(self, path: str):
-        torch.save(self.policy_net.state_dict(), path)
+        torch.save({
+            "model_state_dict": self.policy_net.state_dict(),
+        }, path)
 
-    def load(self, path: str):
-        checkpoint = torch.load(
-            path,
-            map_location=self.device,
-            weights_only=True
-        )
-
-
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            state_dict = checkpoint["model_state_dict"]
-        else:
-            state_dict = checkpoint
-
-        self.policy_net.load_state_dict(state_dict)
+    def load(self, path: str):  
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        self.policy_net.load_state_dict(checkpoint["model_state_dict"])
         self.target_net.load_state_dict(self.policy_net.state_dict())
-
-
-    def _beta_by_frame(self):
-        return min(
-            1.0,
-            self.beta_start + (1.0 - self.beta_start) *
-            (self.step_counter / self.beta_frames)
-        )
 

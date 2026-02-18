@@ -19,10 +19,10 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-
 # -------------------------------------------------
 # Builders
 # -------------------------------------------------
+
 def build_environment(config: dict):
     env_config = config["environment"]
     return MazeEnvironment(config=env_config)
@@ -31,21 +31,36 @@ def build_environment(config: dict):
 def build_agent(config: dict, env):
     agent_cfg = config["agent"]
 
+    # -------------------------------
+    # DEVICE
+    # -------------------------------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # -------------------------------
+    # Replay Buffer
+    # -------------------------------
     replay_buffer = PrioritizedReplayBuffer(
-        capacity=agent_cfg["replay_buffer_size"]
+        capacity=agent_cfg["replay_buffer_size"],
+        alpha=agent_cfg.get("per_alpha", 0.6),
     )
 
+    # -------------------------------
+    # Agent
+    # -------------------------------
     agent = DQNAgent(
         state_dim=env.state_dim,
         action_dim=env.action_space_n,
         replay_buffer=replay_buffer,
         gamma=agent_cfg.get("gamma", 0.99),
-        lr=agent_cfg.get("learning_rate", 1e-3),
+        lr=agent_cfg.get("learning_rate", 3e-4),
         batch_size=agent_cfg.get("batch_size", 64),
         min_replay_size=agent_cfg.get("min_replay_size", 1000),
         tau=agent_cfg.get("tau", 0.005),
         update_frequency=agent_cfg.get("update_frequency", 4),
+        device=device,
     )
+
 
     return agent
 
@@ -58,6 +73,10 @@ def run_experiment(config: dict, seed: int, experiment_id: str):
     set_global_seed(seed)
 
     env = build_environment(config)
+
+    # Sincronizar max_steps
+    env.max_steps = config["training"]["max_steps_per_episode"]
+
     agent = build_agent(config, env)
 
     controller = TrainingController(
@@ -90,12 +109,12 @@ def main():
         "--config",
         type=str,
         default="configs/maze_train.yaml",
-        help="Ruta al archivo de configuración YAML",
+        help="Ruta al archivo YAML",
     )
     args = parser.parse_args()
 
     # -----------------------------------
-    # CUDA Optimizations
+    # CUDA optimizations
     # -----------------------------------
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True

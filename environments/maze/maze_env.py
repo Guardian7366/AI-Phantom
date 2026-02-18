@@ -59,22 +59,27 @@ class MazeEnvironment:
         elif self.curriculum_level == 1:
             self.randomize_grid = False
             self.random_start_goal = True
-            self.wall_probability = 0.03
+            self.wall_probability = 0.05
 
         elif self.curriculum_level == 2:
             self.randomize_grid = True
             self.random_start_goal = True
-            self.wall_probability = 0.05
+            self.wall_probability = 0.08
 
         elif self.curriculum_level == 3:
             self.randomize_grid = True
             self.random_start_goal = True
-            self.wall_probability = 0.08
+            self.wall_probability = 0.12
+
+        elif self.curriculum_level == 4:
+            self.randomize_grid = True
+            self.random_start_goal = True
+            self.wall_probability = 0.15
 
         else:
             self.randomize_grid = True
             self.random_start_goal = True
-            self.wall_probability = 0.10
+            self.wall_probability = 0.18
 
 
 
@@ -136,20 +141,31 @@ class MazeEnvironment:
         self._apply_curriculum()
         self.steps = 0
 
-        # --------------------------------------------------
-        # Generación de grid garantizando conectividad
-        # --------------------------------------------------
         max_attempts = 50
 
         for _ in range(max_attempts):
 
+            # --------------------------------------------------
+            # Generar grid candidato
+            # --------------------------------------------------
             if self.randomize_grid:
                 candidate_grid = self._generate_random_grid()
+
+                # Calcular densidad de muros
+                wall_ratio = np.mean(candidate_grid)
+
+                # Evitar mapas demasiado cerrados
+                if wall_ratio > 0.35:
+                    continue
             else:
                 candidate_grid = self.base_grid.copy()
 
+            # --------------------------------------------------
+            # Sampling start / goal
+            # --------------------------------------------------
             if self.random_start_goal:
                 free_cells = np.argwhere(candidate_grid == 0)
+
                 if len(free_cells) < 2:
                     continue
 
@@ -161,10 +177,17 @@ class MazeEnvironment:
 
                 if start == goal:
                     continue
+
+                min_distance = (self.height + self.width) // 3
+                if self._manhattan_distance(start, goal) < min_distance:
+                    continue
             else:
                 start = (0, 0)
                 goal = (self.height - 1, self.width - 1)
 
+            # --------------------------------------------------
+            # Verificar conectividad
+            # --------------------------------------------------
             if self._is_reachable(candidate_grid, start, goal):
                 self.grid = candidate_grid
                 self.start = start
@@ -176,12 +199,19 @@ class MazeEnvironment:
             self.start = (0, 0)
             self.goal = (self.height - 1, self.width - 1)
 
+        # --------------------------------------------------
+        # Inicializar estado
+        # --------------------------------------------------
         self.agent_pos = list(self.start)
 
-        self.visit_counts = np.zeros((self.height, self.width), dtype=np.float32)
+        self.visit_counts = np.zeros(
+            (self.height, self.width),
+            dtype=np.float32
+        )
         self.visit_counts[self.agent_pos[0], self.agent_pos[1]] += 1
 
         return self._get_state()
+
 
 
     def step(self, action: int):
@@ -191,42 +221,56 @@ class MazeEnvironment:
         nx = self.agent_pos[0] + dx
         ny = self.agent_pos[1] + dy
 
-        reward = -0.015
+        reward = -0.01  # small living cost
         done = False
         info = {"success": False}
 
         old_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
+        # --------------------------------------------------
+        # Movimiento
+        # --------------------------------------------------
         if self._is_wall(nx, ny):
-            reward -= 0.1
+            reward -= 0.15  # reducido (antes 0.3)
         else:
             self.agent_pos = [nx, ny]
 
-            visit_count = self.visit_counts[nx, ny]
-            if visit_count > 0:
-                reward -= 0.01 * min(visit_count, 5)
+            # Bonus por celda nueva
+            if self.visit_counts[nx, ny] == 0:
+                reward += 0.05
+            else:
+                reward -= 0.01
 
             self.visit_counts[nx, ny] += 1
 
         new_dist = self._manhattan_distance(self.agent_pos, self.goal)
 
-        max_dist = self.height + self.width
+        # --------------------------------------------------
+        # Distance shaping suavizado
+        # --------------------------------------------------
+        if new_dist < old_dist:
+            reward += 0.15   # antes 0.3
+        elif new_dist > old_dist:
+            reward -= 0.05   # antes 0.1
 
-        old_potential = -old_dist / max_dist
-        new_potential = -new_dist / max_dist
-        reward += 0.05 * (new_potential - old_potential) # Modelo 2.7.4
-
-
+        # --------------------------------------------------
+        # Goal
+        # --------------------------------------------------
         if tuple(self.agent_pos) == self.goal:
-            reward = 5.0 # Modelo 2.7.8
+            reward = 20.0   # ligeramente más alto
             done = True
             info["success"] = True
 
+        # --------------------------------------------------
+        # Max steps
+        # --------------------------------------------------
         if self.steps >= self.max_steps:
-            reward -= 0.25 # Modelo 2.5.3
+            reward -= 0.5
             done = True
 
         return self._get_state(), reward, done, info
+
+
 
     # ======================================================
 
