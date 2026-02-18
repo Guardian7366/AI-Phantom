@@ -2,6 +2,7 @@ import pygame
 from utils.visualization import StartScreen
 from utils.selection_menu import SelectionMenuScreen
 from utils.maze_train import MazeTrainingScreen
+from utils.archery_train import ArcheryTraningScreen
 
 def main():
 
@@ -88,6 +89,48 @@ def main():
                     maze_train_screen.font_button,
                     maze_train_screen.settings
                 )
+
+            elif result == "archery_train":
+                archery_train_screen = ArcheryTraningScreen(
+                    screen=selection_screen.screen,
+                    settings=selection_screen.settings,
+                    click_sound=selection_screen.click_sound,
+                    font_title=selection_screen.font_title,
+                    font_statsTitle=selection_screen.font_statsTitle,
+                    font_button=selection_screen.font_button,
+                )
+
+                train_result = archery_train_screen.run()
+
+                if train_result in ("selection, back"):
+
+                    #Creation function must be called again to set the correct screen size when changed in maze_train settings
+                    selection_screen = SelectionMenuScreen(
+                    archery_train_screen.screen,
+                    archery_train_screen.click_sound,
+                    archery_train_screen.font_title,
+                    archery_train_screen.font_statsTitle,
+                    archery_train_screen.font_button,
+                    archery_train_screen.settings
+                    )
+
+                elif train_result == "start":
+                    current_screen = "start"
+                
+                else:
+                    #Return to selection screen as default
+                    current_screen = "selection"
+
+                    #Creation function must be called again to set the correct screen size when changed in maze_train settings
+                    selection_screen = SelectionMenuScreen(
+                    archery_train_screen.screen,
+                    archery_train_screen.click_sound,
+                    archery_train_screen.font_title,
+                    archery_train_screen.font_statsTitle,
+                    archery_train_screen.font_button,
+                    archery_train_screen.settings
+                )
+
 
             else:
                 break
