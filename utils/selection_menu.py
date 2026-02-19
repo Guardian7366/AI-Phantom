@@ -1,8 +1,9 @@
 import pygame
 import math
 import os
-from utils.visualization import Button, FPS, WINDOW_WIDTH, WINDOW_HEIGHT
+from utils.visualization import Button
 from utils.settings_state import SettingsState
+from utils.conf import FPS
 
 
 class SelectionMenuScreen:
