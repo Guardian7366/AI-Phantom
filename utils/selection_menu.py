@@ -7,6 +7,7 @@ from utils.settings_state import SettingsState
 
 class SelectionMenuScreen:
 
+    #Get and define parameters for screen configuration from previous screen
     def __init__(self, screen, click_sound, font_title, font_statsTitle, font_button, settings: SettingsState):
         self.screen = screen
         self.clock = pygame.time.Clock()
@@ -19,7 +20,6 @@ class SelectionMenuScreen:
 
         self.settings = settings
 
-        # ✅ Nuevo flag
         self.show_stats = False
 
         self.create_top_buttons()
@@ -27,7 +27,7 @@ class SelectionMenuScreen:
         self.create_cards()
         self.create_stats_buttons()
 
-        # Background
+        #Background
         self.bg_time = 0
         self.bg_speed = 0.5
         self.bg_amplitude = 25
@@ -110,7 +110,6 @@ class SelectionMenuScreen:
             click_sound=self.click_sound
         )
 
-        # ✅ CAMBIADO A STATS
         self.btn_stats = Button(
             rect=(width - 280, 30, 250, 50),
             text="STATS",
@@ -203,7 +202,7 @@ class SelectionMenuScreen:
             self.screen.blit(title_surface, title_rect)
 
     # --------------------------------------------------------
-    # STATS PANEL (NUEVO)
+    # STATS PANEL
     # --------------------------------------------------------
 
     def draw_stats_panel(self):
@@ -217,7 +216,6 @@ class SelectionMenuScreen:
         title = self.font_statsTitle.render("PLAYER STATS", False, (255, 255, 255))
         self.screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 60)))
 
-        # Placeholder seguro
         lines = [
             "Games Played: 0",
             "Wins: 0",

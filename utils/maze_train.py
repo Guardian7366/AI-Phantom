@@ -1,4 +1,3 @@
-# utils/maze_train.py
 import pygame
 import math
 import os
@@ -7,7 +6,7 @@ from typing import Optional
 from utils.visualization import Button, Icon_Button, WINDOW_WIDTH, WINDOW_HEIGHT, FPS
 from utils.settings_state import SettingsState
 
-# Flags para reducir tartamudeo al toggle de fullscreen (opcional)
+# Flags to reduce fullscren transtion stuttering (optional)
 FULLSCREEN_FLAGS = pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
 WINDOWED_FLAGS = pygame.RESIZABLE | pygame.HWSURFACE | pygame.DOUBLEBUF
 
@@ -44,39 +43,38 @@ class MazeTrainingScreen:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # playback state
+        #Playback state
         self.playing = False
         self.speed_index = 0
         self.speeds = [1, 2, 4]  # x1, x2, x4
 
-        # flags
+        #Flags
         self.show_settings = False
 
-        # create buttons (own instances, no reuse)
+        #Create buttons
         self._create_buttons()
-        # compute layout
+        #Compute layout
         self._recalc_layout()
 
-        # apply shared settings
+        #Apply shared sound settings
         self.settings.apply_music_volume()
         self.settings.apply_sfx_volume(self.click_sound)
 
-        # storage for arrow rects used in settings overlay
+        #Storage for arrow rects used in settings overlay
         self._settings_arrow_rects = {}
 
     # ----------------------
-    # CREACIÓN & LAYOUT
+    # CREATION & LAYOUT
     # ----------------------
     def _create_buttons(self):
-        # sizes consistent with StartScreen
+        #Main buttons
         self.btn_back = Button((20, 20, 140, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
         self.btn_settings = Icon_Button((WINDOW_WIDTH - 160, 20, 75, 75), "assets/images/gear.png", self.font_button, (40, 40, 60), (80, 80, 120), click_sound=self.click_sound)
-        # play bbutton
+        #Play bbutton
         self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
         self.btn_ff = Button((0, 0, 120, 44), "x1", self.font_button, (60, 60, 90), (100, 100, 140), click_sound=self.click_sound)
 
-        # NUEVO: botón BACK específico para el overlay de settings
-        # Lo creamos aquí pero su posición la actualizaremos cuando dibujemos el panel
+        #Back button extra for the setting panel
         self.btn_back_overlay = Button((0, 0, 200, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
 
     def _recalc_layout(self):
@@ -92,14 +90,14 @@ class MazeTrainingScreen:
         area_top = 110
         area_h = height - area_top - 70
 
-        # rects
+        #Rects
         self.maze_rect = pygame.Rect(margin, area_top, maze_w, area_h)
         self.stats_rect = pygame.Rect(margin + maze_w + gap, area_top, stats_w, area_h)
 
-        # title center
+        #Title center
         self.title_pos = (width // 2, 48)
 
-        # control positions
+        #Control positions
         ctl_y = area_top + 10
         play_w, play_h = 170, 44
         ff_w, ff_h = 120, 44
@@ -119,11 +117,11 @@ class MazeTrainingScreen:
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)
 
-        # btn_back_overlay will be positioned inside the overlay panel when drawing;
+        #btn_back_overlay will be positioned inside the overlay panel when drawing
 
-    # ----------------------
-    # DIBUJADO
-    # ----------------------
+    # ----------------------------------
+    # DRAW SCREEN ELEMENTS
+    # ----------------------------------
     def _draw_title(self):
         title = self.font_title.render("TRAINING", False, (255, 255, 255))
         rect = title.get_rect(center=self.title_pos)
@@ -133,7 +131,7 @@ class MazeTrainingScreen:
         pygame.draw.rect(self.screen, (12, 14, 22), self.maze_rect)
         pygame.draw.rect(self.screen, (90, 90, 90), self.maze_rect, 3)
 
-        # grid placeholder using cell size ~32 (similar feel a tu StartScreen grid)
+        #Grid placeholder using cell size 32
         cols = max(6, self.maze_rect.width // 32)
         rows = max(6, self.maze_rect.height // 32)
         cell_w = self.maze_rect.width / cols
@@ -147,7 +145,7 @@ class MazeTrainingScreen:
                 color = (18, 20, 30) if (r + c) % 2 == 0 else (14, 16, 24)
                 pygame.draw.rect(self.screen, color, rect)
 
-        # border & placeholder text
+        #Border & placeholder text
         pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
         hint = self.font_button.render("Training placeholder", False, (180, 180, 180))
         self.screen.blit(hint, (self.maze_rect.left + 12, self.maze_rect.top + 12))
@@ -175,23 +173,20 @@ class MazeTrainingScreen:
 
     def _draw_controls(self):
         mouse_pos = pygame.mouse.get_pos()
-        # update/draw top controls
+        #Update/draw top controls
         for b in (self.btn_back, self.btn_settings, self.btn_play, self.btn_ff):
             b.update(mouse_pos)
             b.draw(self.screen)
 
-        # synchronize labels
+        #Synchronize labels
         self.btn_play.text = "PAUSE" if self.playing else "PLAY"
         self.btn_ff.text = f"x{self.speeds[self.speed_index]}"
 
-    # ----------------------
-    # NUEVO: dibujo de barra de volumen + flechas
-    # ----------------------
+    # ----------------------------------
+    # VOLUME BARS AND ARROWS
+    # ----------------------------------
     def draw_volume_bar(self, center_x, y, value):
-        """
-        Dibuja 10 cuadritos centrados en center_x, en la coordenada y.
-        Retorna (start_x, end_x) — coordenadas horizontales de inicio y fin (incluyendo ancho total).
-        """
+        #Draw ten squares to represent current volume
         block_size = 22
         spacing = 6
         total_width = 10 * block_size + 9 * spacing
@@ -213,11 +208,7 @@ class MazeTrainingScreen:
         return start_x, start_x + total_width
 
     def draw_arrows(self, left_x, right_x, y):
-        """
-        Dibuja rectángulos con '<' y '>' a los lados y devuelve (left_rect, right_rect)
-        left_x = coordenada X del inicio de la barra; right_x = X final de la barra
-        y = coordenada vertical (top) donde la barra está dibujada
-        """
+        #Create arrow buttons to control sound volume
         size = 32
         left_rect = pygame.Rect(left_x - size - 15, y - 5, size, size)
         right_rect = pygame.Rect(right_x + 15, y - 5, size, size)
@@ -241,21 +232,21 @@ class MazeTrainingScreen:
         panel_height = height * 0.6
 
         panel_x = (width - panel_width) // 2
-        panel_y = height * 0.20   # 🔥 MÁS ABAJO (ya no tapa el título)
+        panel_y = height * 0.20
 
         panel = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
 
         pygame.draw.rect(self.screen, (20, 20, 30), panel)
         pygame.draw.rect(self.screen, (255, 255, 255), panel, 3)
 
-        # ================= COLUMNAS =================
+        # ================= COLUMNS =================
         left_margin = panel_x + 20
         right_margin = panel.right - 60
 
         # Zona donde comenzarán las barras (MUCHO más a la derecha)
         bar_center_x = panel_x + panel_width * 0.65
 
-        # ================= LAYOUT VERTICAL =================
+        # ================= VERTICAL LAYOUT =================
         top_padding = 100
         bottom_padding = 80
 
@@ -317,27 +308,30 @@ class MazeTrainingScreen:
         self.btn_back_overlay.update(pygame.mouse.get_pos())
         self.btn_back_overlay.draw(self.screen)
 
-    # ----------------------
-    # INTERACCIÓN
-    # ----------------------
+    # ----------------------------------
+    # ELEMENT INTERACTION
+    # ----------------------------------
     def _handle_control_click(self, event):
         if event.type != pygame.MOUSEBUTTONDOWN:
             return None
         pos = event.pos
 
         if self.btn_back.is_clicked(event):
-            # top-left back -> regresar a selection
+            #Return value to move to selection menu in main
             return "selection"
 
         if self.btn_settings.is_clicked(event):
+            #Display setting panel
             self.show_settings = True
             return None
 
         if self.btn_play.is_clicked(event):
+            #Switch Play button mode
             self.playing = not self.playing
             return None
 
         if self.btn_ff.is_clicked(event):
+            #Switch through simulation speeds
             self.speed_index = (self.speed_index + 1) % len(self.speeds)
             return None
 
@@ -377,13 +371,13 @@ class MazeTrainingScreen:
         if self.btn_back_overlay.is_clicked(event):
             self.show_settings = False
 
-    # ----------------------
-    # LOOP PRINCIPAL
-    # ----------------------
+    # ----------------------------------
+    # MAIN LOOP
+    # ----------------------------------
     def run(self):
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
-            # recompute layout only if size changed (cheap check)
+            #Recompute layout only if size changed
             self._recalc_layout()
 
             for event in pygame.event.get():
@@ -397,7 +391,7 @@ class MazeTrainingScreen:
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         self.show_settings = False
                 else:
-                    # interaction
+                    #Interaction
                     res = self._handle_control_click(event)
                     if res == "selection":
                         return "selection"
@@ -405,18 +399,18 @@ class MazeTrainingScreen:
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         return "selection"
 
-                    # clicks inside canvas or stats (placeholder feedback)
+                    #Clicks inside canvas or stats (placeholder feedback)
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         if self.maze_rect.collidepoint(event.pos) or self.stats_rect.collidepoint(event.pos):
                             if self.click_sound:
                                 self.click_sound.play()
 
-            # update training logic when playing (placeholder)
+            #Update training logic when playing (placeholder)
             if self.playing:
                 # here goes stepping training/generator logic, respecting self.speeds[self.speed_index]
                 pass
 
-            # draw
+            #Draw screen elements
             self.screen.fill((10, 12, 18))
             self._draw_title()
             self._draw_maze_area()
