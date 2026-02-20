@@ -389,10 +389,12 @@ class StartScreen:
     # --------------------------------------------------------
 
     def create_buttons(self):
+        #Define center positions with current screen size
         width, height = self.screen.get_size()
         center_x = width // 2
         center_y = height // 2
 
+        #Start button properties
         self.btn_start = Button(
             rect=(center_x - 150, center_y - 80, 300, 60),
             text="START",
@@ -402,6 +404,7 @@ class StartScreen:
             click_sound=self.click_sound
         )
 
+        #Settings button properties
         self.btn_settings = Button(
             rect=(center_x - 150, center_y, 300, 60),
             text="SETTINGS",
@@ -411,6 +414,7 @@ class StartScreen:
             click_sound=self.click_sound
         )
 
+        #Exit button properties
         self.btn_exit = Button(
             rect=(center_x - 150, center_y + 80, 300, 60),
             text="EXIT",
@@ -422,55 +426,68 @@ class StartScreen:
 
     # --------------------------------------------------------
 
+    #Create title on screen
     def draw_title(self):
+        #Define width and height sizes from screen dimensions
         width, height = self.screen.get_size()
+        #Create element label
         title_surface = self.font_title.render("AI PHANTOM", False, (255, 255, 255))
         rect = title_surface.get_rect(center=(width // 2, height // 5))
         self.screen.blit(title_surface, rect)
 
     # --------------------------------------------------------
 
+    #Run Start screen to display
     def run(self):
         while self.running:
-            self.clock.tick(FPS)
-            mouse_pos = pygame.mouse.get_pos()
+            self.clock.tick(FPS) #Screen ticks per second
+            mouse_pos = pygame.mouse.get_pos() #Obtain mouse position
 
             for event in pygame.event.get():
-
+                #Close screen and end execution
                 if event.type == pygame.QUIT:
                     self.running = False
 
+                #Display settings screen if show_settings value is true
                 if self.show_settings:
                     if self.settings_panel.handle_settings_click(event):
+                        #Close when "BACK" event is detected
                         self.show_settings = False
-                        self.create_buttons()  # Recreate buttons to update any settings changes if needed
+                        self.create_buttons()  #Recreate buttons to update any settings changes if needed
                 else:
+                    #Return value to move to Selection menu on main.py
                     if self.btn_start.is_clicked(event):
                         return "selection"
 
+                    #Switch show_setting value to True when the Settings button is clicked
                     if self.btn_settings.is_clicked(event):
                         self.show_settings = True
 
+                    #Set running to false with Exit button to stop screen execution
                     if self.btn_exit.is_clicked(event):
                         self.running = False
 
             # ====================================================
-            # DIBUJADO
+            # DRAW ELEMENTS
             # ====================================================
             self.screen.fill((15, 15, 25))
 
-            # Fondo animado
+            #Animated background
             self.draw_background()
 
+            #Create title
             self.draw_title()
 
             if self.show_settings:
+                #Create settings panel on screen
                 self.settings_panel.draw_settings_panel()
             else:
+                #Update mouse position to determine if the mouse is hovering over the button
                 self.btn_start.update(mouse_pos)
                 self.btn_settings.update(mouse_pos)
                 self.btn_exit.update(mouse_pos)
 
+                #Draw three main buttons by default
                 self.btn_start.draw(self.screen)
                 self.btn_settings.draw(self.screen)
                 self.btn_exit.draw(self.screen)
