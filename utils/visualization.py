@@ -446,7 +446,7 @@ class StartScreen:
                         self.create_buttons()  # Recreate buttons to update any settings changes if needed
                 else:
                     if self.btn_start.is_clicked(event):
-                        return "selection_menu"
+                        return "selection"
 
                     if self.btn_settings.is_clicked(event):
                         self.show_settings = True
