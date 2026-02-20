@@ -1,34 +1,21 @@
 # utils/maze_train.py
 import pygame
 import math
-import os
-from typing import Optional
 
 from utils.visualization import Button, Icon_Button, SettingsPanel
-from utils.settings_state import SettingsState
-from utils.conf import FONTS_PATH, WINDOW_WIDTH, WINDOW_HEIGHT, FPS
+from utils.conf import WINDOW_WIDTH, FPS, Config
 
 class ArcheryTraningScreen:
-    def __init__(
-        self,
-        screen: pygame.Surface,
-        settings: SettingsState,
-        click_sound: Optional[pygame.mixer.Sound],
-        font_title,
-        font_statsTitle,
-        font_button,
-):
-        retro_font_path = os.path.join(FONTS_PATH, "RetroGaming.ttf")
+    def __init__(self, config: Config):
+        self.clock = config.clock
+        self.settings = config.settings
+        self.screen = config.screen
+        self.click_sound = config.click_sound
+        self.font_title = config.font_title
+        self.font_statsTitle = config.font_statsTitle
+        self.font_button = config.font_button
+        self.font_text = config.font_text
 
-        self.screen = screen
-        self.settings = settings
-        self.click_sound = click_sound
-        self.font_title = font_title
-        self.font_statsTitle = font_statsTitle
-        self.font_button = font_button
-        self.font_text = pygame.font.Font(retro_font_path, 20)
-
-        self.clock = pygame.time.Clock()
         self.running = True
 
         # playback state

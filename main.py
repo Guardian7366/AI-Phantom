@@ -4,6 +4,7 @@ from utils.visualization import StartScreen
 from utils.selection_menu import SelectionMenuScreen
 from utils.maze_train import MazeTrainingScreen
 from utils.archery_train import ArcheryTraningScreen
+from utils.conf import Config
 
 def main():
 
@@ -11,7 +12,8 @@ def main():
 
     #Define Start screen at the beginning of execution with default parameters
     current_screen = "start"
-    start_screen = StartScreen(None, False)
+    config = Config()
+    start_screen = StartScreen(config)
 
     #Pygame loop to keep interaction between screens until the code stops or the loop is broken
     while True:
@@ -25,14 +27,7 @@ def main():
             if result == "selection_menu":
 
                 #Insert parameters from the start screen to keep consistence in screen size, fonts, settings, etc.
-                selection_screen = SelectionMenuScreen(
-                    start_screen.screen,
-                    start_screen.click_sound,
-                    start_screen.font_title,
-                    start_screen.font_statsTitle,
-                    start_screen.font_button,
-                    start_screen.settings
-                )
+                selection_screen = SelectionMenuScreen(config)
 
                 #Change current screen variable for next loop iteration
                 current_screen = "selection"
@@ -52,21 +47,12 @@ def main():
                 current_screen = "start"
 
                 #Creation function must be called again to set the correct screen size when changed in settings
-                start_screen = StartScreen(
-                    selection_screen.screen,
-                    selection_screen.settings.fullscreen #Boolean value to define if the game is currently windowed or fullscreen
-                )
+                start_screen = StartScreen(config)
+
             #String value returned to move to the Maze Training screen
             elif result == "maze_train":
                 # Maze Training insance (reuses surface and resources)
-                maze_train_screen = MazeTrainingScreen(
-                    screen=selection_screen.screen,
-                    settings=selection_screen.settings,
-                    click_sound=selection_screen.click_sound,
-                    font_title=selection_screen.font_title,
-                    font_statsTitle=selection_screen.font_statsTitle,
-                    font_button=selection_screen.font_button,
-                )
+                maze_train_screen = MazeTrainingScreen(config)
                 #Run the new screen to disaply
                 train_result = maze_train_screen.run()
 
@@ -75,14 +61,7 @@ def main():
                     current_screen = "selection"
 
                     #Creation function must be called again to set the correct screen size when changed in maze_train settings
-                    selection_screen = SelectionMenuScreen(
-                    maze_train_screen.screen,
-                    maze_train_screen.click_sound,
-                    maze_train_screen.font_title,
-                    maze_train_screen.font_statsTitle,
-                    maze_train_screen.font_button,
-                    maze_train_screen.settings
-                )
+                    selection_screen = SelectionMenuScreen(config)
                 
                 #Returns directly to the Start screen (NOT USED IN CURRENT maze_train CODE)
                 elif train_result == "start":
@@ -92,26 +71,12 @@ def main():
                     current_screen = "selection"
 
                     #Creation function must be called again to set the correct screen size when changed in maze_train settings
-                    selection_screen = SelectionMenuScreen(
-                    maze_train_screen.screen,
-                    maze_train_screen.click_sound,
-                    maze_train_screen.font_title,
-                    maze_train_screen.font_statsTitle,
-                    maze_train_screen.font_button,
-                    maze_train_screen.settings
-                )
+                    selection_screen = SelectionMenuScreen(config)
 
             #String value returned from the selection screen to display the Archery Training screen
             elif result == "archery_train":
                 #Archery Training instance with Selection screen parameters and settings
-                archery_train_screen = ArcheryTraningScreen(
-                    screen=selection_screen.screen,
-                    settings=selection_screen.settings,
-                    click_sound=selection_screen.click_sound,
-                    font_title=selection_screen.font_title,
-                    font_statsTitle=selection_screen.font_statsTitle,
-                    font_button=selection_screen.font_button,
-                )
+                archery_train_screen = ArcheryTraningScreen(config)
 
                 #Run Archery Training screen to display
                 train_result = archery_train_screen.run()
@@ -120,14 +85,7 @@ def main():
                 if train_result in ("selection, back"):
 
                     #Creation function must be called again to set the correct screen size when changed in maze_train settings
-                    selection_screen = SelectionMenuScreen(
-                    archery_train_screen.screen,
-                    archery_train_screen.click_sound,
-                    archery_train_screen.font_title,
-                    archery_train_screen.font_statsTitle,
-                    archery_train_screen.font_button,
-                    archery_train_screen.settings
-                    )
+                    selection_screen = SelectionMenuScreen(config)
 
                 #Returns directly to the Start screen (NOT USED IN CURRENT archery_train CODE)
                 elif train_result == "start":
@@ -138,14 +96,7 @@ def main():
                     current_screen = "selection"
 
                     #Creation function must be called again to set the correct screen size when changed in maze_train settings
-                    selection_screen = SelectionMenuScreen(
-                    archery_train_screen.screen,
-                    archery_train_screen.click_sound,
-                    archery_train_screen.font_title,
-                    archery_train_screen.font_statsTitle,
-                    archery_train_screen.font_button,
-                    archery_train_screen.settings
-                )
+                    selection_screen = SelectionMenuScreen(config)
 
 
             else:

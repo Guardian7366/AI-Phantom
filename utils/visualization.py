@@ -1,8 +1,7 @@
 import pygame
 import os
 import math
-from utils.settings_state import SettingsState
-from utils.conf import WINDOW_WIDTH, WINDOW_HEIGHT, FPS, FONTS_PATH, IMAGES_PATH, SOUNDS_PATH
+from utils.conf import WINDOW_WIDTH, WINDOW_HEIGHT, FPS, IMAGES_PATH, Config
 
 # ============================================================
 # INTERACTIVE BUTTON CLASS
@@ -311,36 +310,18 @@ class SettingsPanel:
 
 class StartScreen:
 
-    def __init__(self, screen, fullscreen):
-        #Audio config
-        self.settings = SettingsState()
-        self.clock = pygame.time.Clock()
-
-        if fullscreen != None:
-            self.settings.fullscreen = fullscreen
-        else:
-            self.settings.fullscreen = False
-
-        if screen != None:
-            self.screen = screen
-        else:
-            self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT)) #Define default screen mode and size
-
-        pygame.display.set_caption("AI Phantom")
+    def __init__(self, config: Config):
+        self.clock = config.clock
+        self.settings = config.settings
+        self.screen = config.screen
+        self.click_sound = config.click_sound
+        self.font_title = config.font_title
+        self.font_statsTitle = config.font_statsTitle
+        self.font_button = config.font_button
+        self.font_text = config.font_text
 
         self.running = True
         self.show_settings = False
-
-        pygame.mixer.init()
-
-        self.load_sounds()
-        self.load_music()
-
-        retro_font_path = os.path.join(FONTS_PATH, "RetroGaming.ttf")
-
-        self.font_title = pygame.font.Font(retro_font_path, 100)
-        self.font_statsTitle = pygame.font.Font(retro_font_path, 72)
-        self.font_button = pygame.font.Font(retro_font_path, 36)
 
         self.create_buttons()
         self.settings_panel = SettingsPanel(self.screen, self.settings, self.click_sound, self.font_button)
@@ -407,29 +388,6 @@ class StartScreen:
 
     # --------------------------------------------------------
 
-    def load_sounds(self):
-        #Get sound effects from the predefined path on the variable
-        click_path = os.path.join(SOUNDS_PATH, "ButtonClick.mp3")
-        if os.path.exists(click_path):
-            #Apply sound effect on button settings
-            self.click_sound = pygame.mixer.Sound(click_path)
-            self.settings.apply_sfx_volume(self.click_sound)
-        else:
-            self.click_sound = None
-
-    # --------------------------------------------------------
-
-    def load_music(self):
-        #Get music from the predefined path on the variable
-        music_path = os.path.join(SOUNDS_PATH, "MenuTheme.mp3")
-        if os.path.exists(music_path):
-            #Apply 
-            pygame.mixer.music.load(music_path)
-            self.settings.apply_music_volume()
-            pygame.mixer.music.play(-1)
-
-    # --------------------------------------------------------
-
     def create_buttons(self):
         width, height = self.screen.get_size()
         center_x = width // 2
@@ -485,6 +443,7 @@ class StartScreen:
                 if self.show_settings:
                     if self.settings_panel.handle_settings_click(event):
                         self.show_settings = False
+                        self.create_buttons()  # Recreate buttons to update any settings changes if needed
                 else:
                     if self.btn_start.is_clicked(event):
                         return "selection_menu"

@@ -2,25 +2,23 @@ import pygame
 import math
 import os
 from utils.visualization import Button
-from utils.settings_state import SettingsState
-from utils.conf import FPS
+from utils.conf import FPS, Config
 
 
 class SelectionMenuScreen:
 
     #Get and define parameters for screen configuration from previous screen
-    def __init__(self, screen, click_sound, font_title, font_statsTitle, font_button, settings: SettingsState):
-        self.screen = screen
-        self.clock = pygame.time.Clock()
+    def __init__(self, config: Config):
+        self.clock = config.clock
+        self.settings = config.settings
+        self.screen = config.screen
+        self.click_sound = config.click_sound
+        self.font_title = config.font_title
+        self.font_statsTitle = config.font_statsTitle
+        self.font_button = config.font_button
+        self.font_text = config.font_text
+
         self.running = True
-
-        self.click_sound = click_sound
-        self.font_title = font_title
-        self.font_statsTitle = font_statsTitle
-        self.font_button = font_button
-
-        self.settings = settings
-
         self.show_stats = False
 
         self.create_top_buttons()
