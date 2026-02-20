@@ -1,129 +1,64 @@
+import argparse
 import os
 import json
-import shutil
-import argparse
-
-DEFAULT_RANKING_FILE = "results/penalized_ranking.json"
-DEFAULT_OUTPUT_DIR = "results/best_model"
-DEFAULT_OUTPUT_NAME = "best_model.pth"
-DEFAULT_CHECKPOINT_DIR = "results/checkpoints"
+from glob import glob
 
 
-# ----------------------------
-# Utilidades
-# ----------------------------
-
-def load_ranking(ranking_file: str):
-    if not os.path.exists(ranking_file):
-        raise FileNotFoundError(
-            f"No existe el archivo de ranking: {ranking_file}"
-        )
-
-    with open(ranking_file, "r") as f:
-        ranking = json.load(f)
-
-    if not ranking:
-        raise RuntimeError("Ranking vacío")
-
-    return ranking
+def load_run_json(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-def resolve_checkpoint_path(experiment_id: str) -> str:
-    """
-    Nueva convención real del proyecto:
+def score(run_payload: dict):
+    # Usa lo que guardamos en results/runs/<run_id>.json
+    last_eval = run_payload.get("last_eval", {}) or {}
+    sr = float(last_eval.get("success_rate", 0.0))
+    ratio = float(last_eval.get("mean_ratio_vs_bfs", 999.0))
+    steps = float(last_eval.get("mean_steps", 1e9))
 
-    results/checkpoints/<experiment_id>/best_model.pth
-    """
+    # Orden: success_rate alto, ratio bajo, steps bajos
+    return (sr, -ratio, -steps)
 
-    ckpt_path = os.path.join(
-        DEFAULT_CHECKPOINT_DIR,
-        experiment_id,
-        "best_model.pth"
-    )
-
-    if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(
-            f"No se encontró el checkpoint esperado: {ckpt_path}"
-        )
-
-    return ckpt_path
-
-
-# ----------------------------
-# Selección
-# ----------------------------
-
-def select_best_experiment(ranking):
-    best = ranking[0]
-
-    if best["score"] <= 0.0:
-        raise RuntimeError(
-            "El mejor modelo tiene score 0.0 — ningún modelo es aceptable"
-        )
-
-    return best
-
-
-def promote_model(best_exp, output_dir: str):
-    os.makedirs(output_dir, exist_ok=True)
-
-    experiment_id = best_exp["experiment_id"]
-
-    ckpt_src = resolve_checkpoint_path(experiment_id)
-    ckpt_dst = os.path.join(output_dir, DEFAULT_OUTPUT_NAME)
-
-    shutil.copyfile(ckpt_src, ckpt_dst)
-
-    metadata = {
-        "experiment_id": experiment_id,
-        "score": best_exp["score"],
-        "eval_success": best_exp["eval_success"],
-        "mean_reward": best_exp["mean_reward"],
-        "mean_length": best_exp["mean_length"],
-        "penalties": best_exp["penalties"],
-        "source_checkpoint": ckpt_src,
-    }
-
-    with open(os.path.join(output_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    return ckpt_dst, metadata
-
-
-# ----------------------------
-# CLI
-# ----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Selección automática del mejor modelo global"
-    )
-    parser.add_argument(
-        "--ranking_file",
-        type=str,
-        default=DEFAULT_RANKING_FILE,
-        help="Archivo penalized_ranking.json",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Directorio destino del modelo ganador",
-    )
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--runs_dir", type=str, default="results/runs")
+    ap.add_argument("--out", type=str, default="results/runs/best_run_selected.json")
+    args = ap.parse_args()
 
-    ranking = load_ranking(args.ranking_file)
-    best = select_best_experiment(ranking)
+    paths = sorted(glob(os.path.join(args.runs_dir, "*.json")))
+    paths = [p for p in paths if not p.endswith("_history.json")]
 
-    ckpt_dst, meta = promote_model(best, args.output_dir)
+    best = None
+    best_path = None
 
-    print("\n=== MODELO GLOBAL SELECCIONADO ===\n")
-    print(f"Experiment ID : {meta['experiment_id']}")
-    print(f"Score         : {meta['score']}")
-    print(f"Eval Success  : {meta['eval_success']}")
-    print(f"Mean Reward   : {meta['mean_reward']}")
-    print(f"Penalties     : {meta['penalties'] or 'NONE'}")
-    print(f"\nCheckpoint promovido a:\n{ckpt_dst}\n")
+    for p in paths:
+        try:
+            payload = load_run_json(p)
+        except Exception:
+            continue
+
+        if best is None or score(payload) > score(best):
+            best = payload
+            best_path = p
+
+    if best is None:
+        raise RuntimeError(f"No se encontraron runs válidos en {args.runs_dir}")
+
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    out_payload = {
+        "selected_run_json": best_path,
+        "run_id": best.get("run_id"),
+        "best_eval_success_rate": best.get("best_eval_success_rate"),
+        "last_eval": best.get("last_eval"),
+        "curriculum_level": best.get("curriculum_level"),
+    }
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(out_payload, f, indent=2, ensure_ascii=False)
+
+    print(json.dumps(out_payload, indent=2, ensure_ascii=False))
+    print(f"Saved: {args.out}")
 
 
 if __name__ == "__main__":

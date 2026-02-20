@@ -1,126 +1,110 @@
-# scripts/plot_training_curve.py
-
-import os
-import json
 import argparse
-import glob
+import json
+import os
 import matplotlib.pyplot as plt
 
 
-# ============================================================
-# Utilidades
-# ============================================================
-
-def load_run_json(path):
+def load_history(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def get_available_runs(runs_dir):
-    pattern = os.path.join(runs_dir, "*.json")
-    return sorted(glob.glob(pattern))
-
-
-# ============================================================
-# Plot principal
-# ============================================================
-
-def plot_training_curves(run_data, experiment_id):
-    training = run_data["training"]
-
-    reward_history = training.get("reward_history", [])
-    length_history = training.get("length_history", [])
-    success_history = training.get("success_history", [])
-    loss_history = training.get("loss_history", [])
-
-    episodes = range(1, len(reward_history) + 1)
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8))
-    fig.suptitle(f"Training Curves - {experiment_id}", fontsize=14)
-
-    # Reward
-    axes[0, 0].plot(episodes, reward_history)
-    axes[0, 0].set_title("Reward per Episode")
-    axes[0, 0].set_xlabel("Episode")
-    axes[0, 0].set_ylabel("Reward")
-    axes[0, 0].grid(True)
-
-    # Length
-    axes[0, 1].plot(episodes, length_history)
-    axes[0, 1].set_title("Episode Length")
-    axes[0, 1].set_xlabel("Episode")
-    axes[0, 1].set_ylabel("Steps")
-    axes[0, 1].grid(True)
-
-    # Success
-    axes[1, 0].plot(episodes, success_history)
-    axes[1, 0].set_title("Success (1/0)")
-    axes[1, 0].set_xlabel("Episode")
-    axes[1, 0].set_ylabel("Success")
-    axes[1, 0].set_ylim(-0.1, 1.1)
-    axes[1, 0].grid(True)
-
-    # Loss
-    axes[1, 1].plot(episodes, loss_history)
-    axes[1, 1].set_title("Loss per Episode")
-    axes[1, 1].set_xlabel("Episode")
-    axes[1, 1].set_ylabel("Loss")
-    axes[1, 1].grid(True)
-
-    plt.tight_layout()
-    plt.show()
-
-
-# ============================================================
-# CLI
-# ============================================================
-
 def main():
-    parser = argparse.ArgumentParser(description="Plot training curves from run JSON.")
-    parser.add_argument(
-        "--run",
-        type=str,
-        default=None,
-        help="Exact experiment_id (ej: maze_dqn_v1_seed42)"
-    )
-    parser.add_argument(
-        "--runs_dir",
-        type=str,
-        default="results/runs",
-        help="Directory containing run JSON files"
-    )
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--history", type=str, required=True,
+                    help="Ruta a results/runs/<run_id>_history.json")
+    ap.add_argument("--out_dir", type=str, default="results/plots")
+    args = ap.parse_args()
 
-    args = parser.parse_args()
+    hist = load_history(args.history)
+    os.makedirs(args.out_dir, exist_ok=True)
 
-    if not os.path.exists(args.runs_dir):
-        raise FileNotFoundError(f"Runs directory not found: {args.runs_dir}")
+    ep = hist["episode"]
+    reward = hist["reward"]
+    success = hist["success"]
+    epsilon = hist["epsilon"]
+    loss = hist["loss"]
 
-    available_runs = get_available_runs(args.runs_dir)
+    # 1) Reward
+    plt.figure()
+    plt.plot(ep, reward)
+    plt.title("Episode Reward")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    out1 = os.path.join(args.out_dir, "reward.png")
+    plt.savefig(out1, dpi=150, bbox_inches="tight")
+    plt.close()
 
-    if len(available_runs) == 0:
-        raise RuntimeError("No run JSON files found.")
+    # 2) Success (moving average simple)
+    window = 200
+    sm = []
+    for i in range(len(success)):
+        j0 = max(0, i - window + 1)
+        sm.append(sum(success[j0:i+1]) / float(i - j0 + 1))
 
-    # Si no especifica run → usar el primero
-    if args.run is None:
-        selected_path = available_runs[0]
-        print(f"[INFO] No run specified. Using: {os.path.basename(selected_path)}")
+    plt.figure()
+    plt.plot(ep, sm)
+    plt.title(f"Success Rate (moving avg, window={window})")
+    plt.xlabel("Episode")
+    plt.ylabel("Success Rate")
+    out2 = os.path.join(args.out_dir, "success.png")
+    plt.savefig(out2, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # 3) Epsilon
+    plt.figure()
+    plt.plot(ep, epsilon)
+    plt.title("Epsilon")
+    plt.xlabel("Episode")
+    plt.ylabel("Epsilon")
+    out3 = os.path.join(args.out_dir, "epsilon.png")
+    plt.savefig(out3, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # 4) Loss (ignorar None)
+    xs = []
+    ys = []
+    for e, l in zip(ep, loss):
+        if l is not None:
+            xs.append(e)
+            ys.append(l)
+
+    if len(xs) > 10:
+        plt.figure()
+        plt.plot(xs, ys)
+        plt.title("Loss (Huber)")
+        plt.xlabel("Episode")
+        plt.ylabel("Loss")
+        out4 = os.path.join(args.out_dir, "loss.png")
+        plt.savefig(out4, dpi=150, bbox_inches="tight")
+        plt.close()
     else:
-        matches = [
-            path for path in available_runs
-            if args.run in os.path.basename(path)
-        ]
+        out4 = None
 
-        if len(matches) == 0:
-            raise RuntimeError(f"Run '{args.run}' not found in {args.runs_dir}")
+    # 5) Eval success over time
+    eval_points = hist.get("eval", [])
+    if eval_points:
+        x = [p["episode"] for p in eval_points]
+        y = [p["success_rate"] for p in eval_points]
+        plt.figure()
+        plt.plot(x, y)
+        plt.title("Evaluation Success Rate")
+        plt.xlabel("Episode")
+        plt.ylabel("Success Rate")
+        out5 = os.path.join(args.out_dir, "eval_success.png")
+        plt.savefig(out5, dpi=150, bbox_inches="tight")
+        plt.close()
+    else:
+        out5 = None
 
-        selected_path = matches[0]
-
-    run_data = load_run_json(selected_path)
-    experiment_id = run_data.get("experiment_id", "unknown_experiment")
-
-    print(f"[INFO] Plotting training curves for: {experiment_id}")
-
-    plot_training_curves(run_data, experiment_id)
+    print("Saved plots:")
+    print(" -", out1)
+    print(" -", out2)
+    print(" -", out3)
+    if out4:
+        print(" -", out4)
+    if out5:
+        print(" -", out5)
 
 
 if __name__ == "__main__":

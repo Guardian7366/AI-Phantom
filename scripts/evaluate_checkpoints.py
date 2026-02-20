@@ -1,207 +1,72 @@
-# scripts/evaluate_checkpoints.py
-# Evaluación CONSISTENTE con entrenamiento (Opción A)
-
+import argparse
 import os
 import json
-import yaml
 import torch
-import argparse
 
+from environments.maze.maze_env import MazeEnvironment, MazeConfig
+from agents.dqn.dqn_agent import DQNAgent, DQNConfig
 from controllers.evaluation_controller import EvaluationController
-from environments.maze.maze_env import MazeEnvironment
-from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import PrioritizedReplayBuffer
 
 
-# -------------------------------------------------
-# ARGPARSE
-# -------------------------------------------------
+def eval_one_run(run_dir: str, which: str, episodes: int, level: int, seed: int):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    env = MazeEnvironment(MazeConfig(), rng_seed=seed)
+    agent = DQNAgent(DQNConfig(), device=device)
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/maze_train.yaml",  # 🔥 USAMOS TRAIN CONFIG
-        help="Ruta al archivo YAML de entrenamiento"
-    )
-    return parser.parse_args()
+    model_file = "best_model.pth" if which == "best" else "last_model.pth"
+    model_path = os.path.join(run_dir, model_file)
+    if not os.path.exists(model_path):
+        return None
 
+    sd = torch.load(model_path, map_location=device)
+    agent.q.load_state_dict(sd)
+    agent.q_tgt.load_state_dict(sd)
+    agent.q.eval()
+    agent.q_tgt.eval()
 
-# -------------------------------------------------
-# CARGA SEGURA DE CHECKPOINT
-# -------------------------------------------------
+    evaluator = EvaluationController(env, agent)
+    stats = evaluator.evaluate(episodes=episodes, curriculum_level=level, seed=seed)
+    return {"run_dir": run_dir, "model": which, **stats}
 
-def validate_checkpoint_compatibility(agent: DQNAgent, checkpoint_path: str) -> bool:
-    try:
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location="cpu",
-            weights_only=True
-        )
-
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            state_dict = checkpoint["model_state_dict"]
-        else:
-            state_dict = checkpoint
-
-        agent.policy_net.load_state_dict(state_dict, strict=True)
-        return True
-
-    except Exception as e:
-        print(f"[SKIP] Incompatible ({e}): {checkpoint_path}")
-        return False
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
 
 def main():
-    args = parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoints_root", type=str, default="results/checkpoints")
+    ap.add_argument("--which", type=str, default="best", choices=["best", "last"])
+    ap.add_argument("--episodes", type=int, default=300)
+    ap.add_argument("--level", type=int, default=2)
+    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--out", type=str, default="results/runs/checkpoints_eval_summary.json")
+    args = ap.parse_args()
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
-    env_cfg = config["environment"]
-    training_cfg = config["training"]
+    runs = []
+    if not os.path.isdir(args.checkpoints_root):
+        raise FileNotFoundError(f"No existe checkpoints_root: {args.checkpoints_root}")
 
-    checkpoint_root = training_cfg["checkpoint_dir"]
-    results_root = training_cfg["results_dir"]
-
-    all_results = []
-
-    # -------------------------------------------------
-    # Buscar checkpoints BEST por experimento
-    # -------------------------------------------------
-
-    checkpoint_files = []
-
-    for root, _, files in os.walk(checkpoint_root):
-        for f in files:
-            if f == "best_model.pth":
-                checkpoint_files.append(os.path.join(root, f))
-
-    checkpoint_files = sorted(checkpoint_files)
-
-    if not checkpoint_files:
-        raise RuntimeError(
-            f"No se encontraron best_model.pth en {checkpoint_root}"
-        )
-
-    # -------------------------------------------------
-    # Loop evaluación
-    # -------------------------------------------------
-
-    for ckpt_path in checkpoint_files:
-
-        experiment_id = os.path.basename(os.path.dirname(ckpt_path))
-        result_json_path = os.path.join(results_root, f"{experiment_id}.json")
-
-        if not os.path.exists(result_json_path):
-            print(f"[SKIP] No existe JSON de experimento: {experiment_id}")
+    for name in sorted(os.listdir(args.checkpoints_root)):
+        run_dir = os.path.join(args.checkpoints_root, name)
+        if not os.path.isdir(run_dir):
             continue
+        res = eval_one_run(run_dir, args.which, args.episodes, args.level, args.seed)
+        if res is not None:
+            runs.append(res)
 
-        with open(result_json_path, "r", encoding="utf-8") as f:
-            experiment_data = json.load(f)
+    payload = {
+        "checkpoints_root": args.checkpoints_root,
+        "which": args.which,
+        "episodes": args.episodes,
+        "level": args.level,
+        "seed": args.seed,
+        "runs": runs
+    }
 
-        final_level = experiment_data["training"].get(
-            "final_curriculum_level", 0
-        )
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 
-        # -------------------------------------------------
-        # ENV FACTORY (idéntica a TrainingController)
-        # -------------------------------------------------
-
-        def env_factory():
-            env = MazeEnvironment(env_cfg)
-            env.set_curriculum_level(final_level)
-
-            # 🔥 sincronizar max_steps EXACTAMENTE
-            env.max_steps = training_cfg["max_steps_per_episode"]
-
-            return env
-
-        # -------------------------------------------------
-        # AGENT FACTORY
-        # -------------------------------------------------
-
-        temp_env = MazeEnvironment(env_cfg)
-
-        def agent_factory():
-            replay_buffer = PrioritizedReplayBuffer(capacity=1)
-            agent = DQNAgent(
-                state_dim=temp_env.state_dim,
-                action_dim=temp_env.action_space_n,
-                replay_buffer=replay_buffer,
-                gamma=config["agent"]["gamma"],
-                lr=config["agent"]["learning_rate"],
-                batch_size=config["agent"]["batch_size"],
-                min_replay_size=config["agent"]["min_replay_size"],
-                tau=config["agent"]["tau"],
-                update_frequency=config["agent"]["update_frequency"],
-            )
-            agent.set_mode(False)
-            return agent
-
-        # Validación
-        temp_agent = agent_factory()
-        if not validate_checkpoint_compatibility(temp_agent, ckpt_path):
-            continue
-
-        # -------------------------------------------------
-        # Evaluador
-        # -------------------------------------------------
-
-        evaluator = EvaluationController(
-            env_factory=env_factory,
-            agent_factory=agent_factory,
-            config={
-                "evaluation": {
-                    "num_episodes": 200,
-                    "seed": 123,
-                }
-            },
-        )
-
-        summary = evaluator.evaluate_checkpoint(
-            ckpt_path,
-            forced_curriculum_level=final_level,
-        )
-
-        summary["model"] = experiment_id
-        summary["curriculum_level"] = final_level
-
-        all_results.append(summary)
-
-    # -------------------------------------------------
-    # TABLA
-    # -------------------------------------------------
-
-    print("\n=== COMPARATIVA CONSISTENTE (TRAIN CONFIG) ===\n")
-
-    header = (
-        f"{'Model':35} | {'Lvl':4} | "
-        f"{'Success':8} | {'MeanLen':8} | {'MeanRew':8}"
-    )
-    print(header)
-    print("-" * len(header))
-
-    for r in all_results:
-        print(
-            f"{r['model']:35} | "
-            f"{r['curriculum_level']:4} | "
-            f"{r['success_rate']:.3f}   | "
-            f"{r['mean_length']:.2f}   | "
-            f"{r['mean_reward']:.2f}"
-        )
-
-    # Guardar
-    output_path = "results/checkpoint_evaluation_consistent.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=2)
-
-    print(f"\nResultados guardados en {output_path}\n")
+    print(f"Saved: {args.out}")
+    print(f"Runs evaluated: {len(runs)}")
 
 
 if __name__ == "__main__":

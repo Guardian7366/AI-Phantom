@@ -1,112 +1,43 @@
-import os
-import numpy as np
-from typing import Dict, Any, List, Optional
+from __future__ import annotations
 
-DEFAULT_BEST_MODEL_PATH = os.path.join(
-    "results", "best_model", "best_model.pth"
-)
+from typing import Dict, Any
 
 
 class InferenceController:
     """
-    Controlador de inferencia pura.
-    Ejecuta episodios deterministas sin aprendizaje ni exploración.
+    Controller mínimo y limpio:
+    - Ejecuta un episodio determinista para integrarlo con sandbox.
     """
-
-    def __init__(
-        self,
-        env,
-        agent,
-        model_path: Optional[str] = None,
-        num_episodes: int = 10,
-        max_steps_per_episode: int = 500,
-        render: bool = False,
-        render_delay: float = 0.0,
-    ):
+    def __init__(self, env, agent):
         self.env = env
         self.agent = agent
 
-        # Resolución automática del modelo
-        self.model_path = model_path or DEFAULT_BEST_MODEL_PATH
-        self._validate_model_path()
+    def run_episode(self, curriculum_level: int = 2, seed: int = 123) -> Dict[str, Any]:
+        obs, info = self.env.reset(curriculum_level=curriculum_level, seed=seed)
+        done = False
+        trunc = False
 
-        self.num_episodes = num_episodes
-        self.max_steps = max_steps_per_episode
-
-        self.render = render
-        self.render_delay = render_delay
-
-        # Métricas descriptivas
-        self.episode_rewards: List[float] = []
-        self.episode_lengths: List[int] = []
-        self.successes: List[int] = []
-
-    # ----------------------------
-    # Validaciones
-    # ----------------------------
-
-    def _validate_model_path(self):
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(
-                f"Modelo de inferencia no encontrado: {self.model_path}"
-            )
-
-    # ----------------------------
-    # Ejecución
-    # ----------------------------
-
-    def run(self) -> Dict[str, Any]:
-        """
-        Ejecuta episodios completos en modo inferencia pura.
-        """
-        # Configurar agente
-        self.agent.set_mode(training=False)
-        self.agent.load(self.model_path)
-
-        for episode in range(1, self.num_episodes + 1):
-            state = self.env.reset()
-
-            episode_reward = 0.0
-            success = False
-
-            for step in range(self.max_steps):
-                action = self.agent.select_action(
-                    state,
-                    epsilon=0.0  # inferencia 100% pura
-                )
-
-                next_state, reward, done, info = self.env.step(action)
-
-                episode_reward += reward
-                state = next_state
-
-                if self.render:
-                    self.env.render()
-                    if self.render_delay > 0:
-                        import time
-                        time.sleep(self.render_delay)
-
-                if done:
-                    success = info.get("success", False)
-                    break
-
-            self.episode_rewards.append(episode_reward)
-            self.episode_lengths.append(step + 1)
-            self.successes.append(1 if success else 0)
-
-        return self._build_inference_summary()
-
-    # ----------------------------
-    # Métricas
-    # ----------------------------
-
-    def _build_inference_summary(self) -> Dict[str, Any]:
-        return {
-            "model_path": self.model_path,
-            "episodes": self.num_episodes,
-            "mean_reward": float(np.mean(self.episode_rewards)),
-            "mean_length": float(np.mean(self.episode_lengths)),
-            "success_rate": float(np.mean(self.successes)),
-            "rewards": self.episode_rewards,
-            "lengths": self.episode_lengths,
+        episode = {
+            "grid": self.env.grid.tolist(),
+            "start": list(self.env.agent_pos),
+            "goal": list(self.env.goal_pos),
+            "steps": [],
+            "meta": {"curriculum_level": int(curriculum_level), "seed": int(seed)},
         }
+
+        while not (done or trunc):
+            a = self.agent.act(obs, deterministic=True)
+            prev = self.env.agent_pos
+            obs, r, done, trunc, info = self.env.step(a)
+            episode["steps"].append({
+                "action": int(a),
+                "reward": float(r),
+                "from": list(prev),
+                "to": list(self.env.agent_pos),
+                "done": bool(done),
+                "trunc": bool(trunc),
+            })
+
+        episode["meta"]["success"] = bool(done)
+        episode["meta"]["num_steps"] = len(episode["steps"])
+        return episode

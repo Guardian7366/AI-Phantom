@@ -1,123 +1,65 @@
 import argparse
-import yaml
+import os
+import json
+import torch
 
-from environments.maze.maze_env import MazeEnvironment
-from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import PrioritizedReplayBuffer
-from controllers.inference_controller import InferenceController
+from environments.maze.maze_env import MazeEnvironment, MazeConfig
+from agents.dqn.dqn_agent import DQNAgent, DQNConfig
 
-
-# -------------------------------------------------
-# Config
-# -------------------------------------------------
-
-def load_config(path: str) -> dict:
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
-
-# -------------------------------------------------
-# Builders (robustos y desacoplados)
-# -------------------------------------------------
-
-def build_environment(config: dict):
-    env_config = config["environment"]
-    return MazeEnvironment(config=env_config)
-
-
-def build_agent(config: dict, env):
-    agent_cfg = config.get("agent", {})
-
-    # 🔹 En inferencia no necesitamos replay buffer real
-    # Si existe replay_buffer_size (por compatibilidad con train), usarlo.
-    buffer_capacity = agent_cfg.get("replay_buffer_size", 1)
-
-    replay_buffer = PrioritizedReplayBuffer(capacity=buffer_capacity)
-
-    agent = DQNAgent(
-        state_dim=env.state_dim,
-        action_dim=env.action_space_n,
-        replay_buffer=replay_buffer,
-        gamma=agent_cfg.get("gamma", 0.99),
-        lr=agent_cfg.get("learning_rate", 1e-3),
-        batch_size=agent_cfg.get("batch_size", 64),
-        min_replay_size=agent_cfg.get("min_replay_size", 1),
-        update_frequency=agent_cfg.get("update_frequency", 4),
-    )
-
-
-    return agent
-
-
-# -------------------------------------------------
-# Main
-# -------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run inference with best trained model"
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/maze_inference.yaml",
-        help="Inference config file"
-    )
-    parser.add_argument(
-        "--episodes",
-        type=int,
-        default=None,
-        help="Override number of inference episodes"
-    )
-    parser.add_argument(
-        "--render",
-        action="store_true",
-        help="Render environment"
-    )
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint_dir", type=str, required=True)
+    ap.add_argument("--which", type=str, default="best", choices=["best", "last"])
+    ap.add_argument("--level", type=int, default=2)
+    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--out", type=str, default="results/inference/inference_episode.json")
+    args = ap.parse_args()
 
-    # ----------------------------
-    # Load config
-    # ----------------------------
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
-    cfg = load_config(args.config)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    env = MazeEnvironment(MazeConfig(), rng_seed=args.seed)
+    agent = DQNAgent(DQNConfig(), device=device)
 
-    env = build_environment(cfg)
-    agent = build_agent(cfg, env)
+    model_file = "best_model.pth" if args.which == "best" else "last_model.pth"
+    model_path = os.path.join(args.checkpoint_dir, model_file)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(model_path)
 
-    inference_cfg = cfg.get("inference", {})
+    sd = torch.load(model_path, map_location=device)
+    agent.q.load_state_dict(sd)
+    agent.q_tgt.load_state_dict(sd)
+    agent.q.eval()
 
-    num_episodes = (
-        args.episodes
-        if args.episodes is not None
-        else inference_cfg.get("num_episodes", 10)
-    )
+    obs, info = env.reset(curriculum_level=args.level, seed=args.seed)
+    done = False
+    trunc = False
 
-    max_steps = inference_cfg.get("max_steps_per_episode", 500)
+    episode = {
+        "grid": env.grid.tolist(),
+        "start": list(env.agent_pos),
+        "goal": list(env.goal_pos),
+        "steps": []
+    }
 
-    # 🔹 Compatibilidad con tu YAML actual (model.path)
-    model_path = None
-    if "model" in cfg:
-        model_path = cfg["model"].get("path")
+    while not (done or trunc):
+        a = agent.act(obs, deterministic=True)
+        prev = env.agent_pos
+        obs, r, done, trunc, info = env.step(a)
+        episode["steps"].append({
+            "action": int(a),
+            "reward": float(r),
+            "from": list(prev),
+            "to": list(env.agent_pos),
+            "done": bool(done),
+            "trunc": bool(trunc),
+        })
 
-    controller = InferenceController(
-        env=env,
-        agent=agent,
-        model_path=model_path,
-        num_episodes=num_episodes,
-        max_steps_per_episode=max_steps,
-        render=args.render,
-        render_delay=inference_cfg.get("render_delay", 0.0),
-    )
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(episode, f, indent=2, ensure_ascii=False)
 
-    results = controller.run()
-
-    print("\n=== INFERENCE SUMMARY ===")
-    print(f"Model path     : {results['model_path']}")
-    print(f"Episodes       : {results['episodes']}")
-    print(f"Success rate   : {results['success_rate']:.3f}")
-    print(f"Mean reward    : {results['mean_reward']:.3f}")
-    print(f"Mean length    : {results['mean_length']:.2f}")
+    print(f"Saved: {args.out}")
 
 
 if __name__ == "__main__":

@@ -1,130 +1,45 @@
+import argparse
 import os
 import json
-import argparse
-import numpy as np
-from typing import List, Dict
-
-
-DEFAULT_RESULTS_DIR = "results"
-
-
-def is_experiment_file(data) -> bool:
-    """
-    Verifica si el JSON corresponde a un experimento entrenado
-    y no a trayectorias, plots u otros artefactos.
-    """
-    if not isinstance(data, dict):
-        return False
-
-    # Debe tener al menos alguna de estas secciones
-    return "training" in data or "evaluation" in data
-
-
-def load_results(results_dir: str) -> List[Dict]:
-    experiments = []
-
-    for root, _, files in os.walk(results_dir):
-        for fname in files:
-            if not fname.endswith(".json"):
-                continue
-
-            path = os.path.join(root, fname)
-
-            with open(path, "r", encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    continue
-
-            if not is_experiment_file(data):
-                continue
-
-            experiments.append(data)
-
-    if not experiments:
-        raise RuntimeError(
-            "No se encontraron archivos de resultados de experimentos válidos"
-        )
-
-    return experiments
-
-
-def summarize_experiments(experiments: List[Dict]) -> List[Dict]:
-    summary = []
-
-    for exp in experiments:
-        training = exp.get("training", {})
-        evaluation = exp.get("evaluation", {})
-
-        summary.append({
-            "experiment_id": exp.get("experiment_id", "unknown"),
-            "episodes": training.get("episodes"),
-            "best_success_rate": training.get("best_success_rate"),
-            "mean_reward_eval": evaluation.get("mean_reward"),
-            "mean_length_eval": evaluation.get("mean_length"),
-            "success_rate_eval": evaluation.get("success_rate"),
-        })
-
-    return summary
-
-
-def print_table(summary: List[Dict], sort_by: str):
-    summary = sorted(
-        summary,
-        key=lambda x: x.get(sort_by, -np.inf),
-        reverse=True,
-    )
-
-    header = (
-        f"{'Experiment':30} | "
-        f"{'Succ(eval)':10} | "
-        f"{'Rew(eval)':10} | "
-        f"{'Len(eval)':10} | "
-        f"{'Succ(train)':10} | "
-        f"{'Episodes':8}"
-    )
-
-    print("\n=== COMPARATIVA DE EXPERIMENTOS ===\n")
-    print(header)
-    print("-" * len(header))
-
-    for row in summary:
-        print(
-            f"{row['experiment_id'][:30]:30} | "
-            f"{row['success_rate_eval']:.3f}      | "
-            f"{row['mean_reward_eval']:.2f}      | "
-            f"{row['mean_length_eval']:.2f}      | "
-            f"{row['best_success_rate']:.3f}      | "
-            f"{row['episodes']:8}"
-        )
+from glob import glob
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Comparador de resultados AI Phantom"
-    )
-    parser.add_argument(
-        "--results_dir",
-        type=str,
-        default=DEFAULT_RESULTS_DIR,
-        help="Directorio con archivos results/**/*.json",
-    )
-    parser.add_argument(
-        "--sort_by",
-        type=str,
-        default="success_rate_eval",
-        choices=[
-            "success_rate_eval",
-            "mean_reward_eval",
-            "mean_length_eval",
-        ],
-        help="Métrica principal para ordenar",
-    )
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--runs_dir", type=str, default="results/runs")
+    ap.add_argument("--topk", type=int, default=10)
+    args = ap.parse_args()
 
-    experiments = load_results(args.results_dir)
-    summary = summarize_experiments(experiments)
-    print_table(summary, args.sort_by)
+    paths = sorted(glob(os.path.join(args.runs_dir, "*.json")))
+    paths = [p for p in paths if not p.endswith("_history.json")]
+
+    rows = []
+    for p in paths:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                run = json.load(f)
+        except Exception:
+            continue
+
+        ev = run.get("last_eval", {}) or {}
+        rows.append({
+            "path": p,
+            "run_id": run.get("run_id"),
+            "sr": float(ev.get("success_rate", 0.0)),
+            "ratio": float(ev.get("mean_ratio_vs_bfs", 999.0)),
+            "steps": float(ev.get("mean_steps", 1e9)),
+            "curriculum": run.get("curriculum_level"),
+        })
+
+    rows.sort(key=lambda x: (x["sr"], -x["ratio"], -x["steps"]), reverse=True)
+
+    print(f"Found runs: {len(rows)}")
+    print(f"Top {min(args.topk, len(rows))}:")
+    for r in rows[: args.topk]:
+        print(
+            f"- {r['run_id']} | SR={r['sr']:.3f} ratio={r['ratio']:.3f} steps={r['steps']:.1f} "
+            f"lvl={r['curriculum']} | {os.path.basename(r['path'])}"
+        )
 
 
 if __name__ == "__main__":

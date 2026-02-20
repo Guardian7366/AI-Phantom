@@ -1,298 +1,371 @@
-from typing import Callable
+# environments/maze/maze_env.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional, Any, List, Callable
+from collections import deque
+
 import numpy as np
-import random
+
+ACTIONS = {
+    0: (-1, 0),
+    1: ( 1, 0),
+    2: ( 0,-1),
+    3: ( 0, 1),
+}
+
+
+@dataclass
+class MazeConfig:
+    size: int = 8
+    wall_prob: float = 0.28
+    max_gen_tries: int = 200
+    max_steps: int = 128
+
+    # Recompensas
+    step_penalty: float = -0.01
+    invalid_move_penalty: float = -0.02
+    goal_reward: float = 1.0
+    progress_reward: float = 0.02
+
+    # Evita casos triviales / demasiado cortos
+    min_bfs_start_goal_lvl1: int = 2
+    min_bfs_start_goal_lvl2: int = 4
+
+    # Pool de grids para lvl2 (estabilidad + generalización)
+    lvl2_grid_pool_size: int = 64           # 0 => desactivado
+    lvl2_pool_refresh_prob: float = 0.05    # ✅ default alineado con YAML "estable"
 
 
 class MazeEnvironment:
+    """
+    Laberinto NxN con muros (1=wall, 0=free). Genera laberintos resolubles.
+    Observación: (3, H, W) = (walls, agent, goal).
 
-    ACTIONS = {
-        0: (-1, 0),
-        1: (0, 1),
-        2: (1, 0),
-        3: (0, -1),
-    }
+    Reproducibilidad / estabilidad:
+    - reset(seed=...) reseedea el RNG del env para reproducibilidad por episodio.
+    - En lvl2 con pool activo, el pool SOLO se resetea si reset_pool=True (y lvl>=2).
+    - freeze_pool=True evita refreshes del pool durante evaluación/batch (señal comparable).
+    """
 
-    def __init__(self, config: dict):
-        self.config = config
+    def __init__(self, config: Optional[MazeConfig] = None, rng_seed: int = 0):
+        self.cfg = config or MazeConfig()
+        self.rng = np.random.default_rng(int(rng_seed))
 
-        if "grid" not in config:
-            raise KeyError("MazeEnvironment requiere 'grid' base")
+        self.size = int(self.cfg.size)
+        self.grid = np.zeros((self.size, self.size), dtype=np.int8)
+        self.agent_pos: Tuple[int, int] = (0, 0)
+        self.goal_pos: Tuple[int, int] = (self.size - 1, self.size - 1)
 
-        self.base_grid = np.array(config["grid"], dtype=np.int32)
-        self.height, self.width = self.base_grid.shape
+        self.steps = 0
+        self.last_bfs_dist: Optional[int] = None
 
-        self.max_steps = config.get("max_steps", 500)
+        # Nivel 0/1: grid fijo
+        self.fixed_grid_cache: Optional[np.ndarray] = None
 
-        self.randomize_grid = config.get("randomize_grid", False)
-        self.random_start_goal = config.get("random_start_goal", False)
-        self.wall_probability = config.get("wall_probability", 0.0)
+        # Pool lvl2
+        self._lvl2_pool: List[np.ndarray] = []
+        self._lvl2_pool_size = max(0, int(getattr(self.cfg, "lvl2_grid_pool_size", 0)))
+        self._lvl2_refresh_prob = float(getattr(self.cfg, "lvl2_pool_refresh_prob", 0.0))
 
-        # Curriculum level
-        self.curriculum_level = 0
+        # BFS buffers reutilizables (performance)
+        self._bfs_dist_grid = np.full((self.size, self.size), -1, dtype=np.int16)
+        self._bfs_queue: deque = deque()
 
-        self.channels = 4
-        self.state_shape = (self.channels, self.height, self.width)
-        self.state_dim = self.state_shape
+    # -------------------------
+    # API
+    # -------------------------
+    def reset(
+        self,
+        *,
+        curriculum_level: int = 0,
+        seed: Optional[int] = None,
+        reset_pool: bool = False,
+        freeze_pool: bool = False,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        lvl = int(curriculum_level)
 
-        self.action_space_n = 4
-        self.action_space = self.action_space_n
-        self.observation_space = self.state_shape
+        # Re-seed del RNG (reproducible por episodio)
+        if seed is not None:
+            self.rng = np.random.default_rng(int(seed))
 
-        self.factory: Callable[[], "MazeEnvironment"] = (
-            lambda: MazeEnvironment(self.config)
-        )
+        # ✅ Blindaje: solo lvl2 puede resetear pool (evita efectos colaterales)
+        if bool(reset_pool) and lvl >= 2 and self._lvl2_pool_size > 0:
+            self._lvl2_pool.clear()
 
-    # ======================================================
-    # CURRICULUM CONTROL
-    # ======================================================
-
-    def set_curriculum_level(self, level: int):
-        self.curriculum_level = level
-
-    def _apply_curriculum(self):
-
-        if self.curriculum_level == 0:
-            self.randomize_grid = False
-            self.random_start_goal = False
-            self.wall_probability = 0.0
-
-        elif self.curriculum_level == 1:
-            self.randomize_grid = False
-            self.random_start_goal = True
-            self.wall_probability = 0.05
-
-        elif self.curriculum_level == 2:
-            self.randomize_grid = True
-            self.random_start_goal = True
-            self.wall_probability = 0.08
-
-        elif self.curriculum_level == 3:
-            self.randomize_grid = True
-            self.random_start_goal = True
-            self.wall_probability = 0.12
-
-        elif self.curriculum_level == 4:
-            self.randomize_grid = True
-            self.random_start_goal = True
-            self.wall_probability = 0.15
-
-        else:
-            self.randomize_grid = True
-            self.random_start_goal = True
-            self.wall_probability = 0.18
-
-
-
-    # ======================================================
-
-    def _generate_random_grid(self):
-        grid = np.zeros((self.height, self.width), dtype=np.int32)
-        for i in range(self.height):
-            for j in range(self.width):
-                if random.random() < self.wall_probability:
-                    grid[i, j] = 1
-        return grid
-    
-    # ======================================================
-    # Connectivity Check (Modelo 2.7.2)
-    # ======================================================
-
-    def _is_reachable(self, grid, start, goal):
-        from collections import deque
-
-        if grid[start[0], start[1]] == 1:
-            return False
-        if grid[goal[0], goal[1]] == 1:
-            return False
-
-        visited = np.zeros_like(grid, dtype=bool)
-        queue = deque([start])
-        visited[start[0], start[1]] = True
-
-        while queue:
-            x, y = queue.popleft()
-
-            if (x, y) == goal:
-                return True
-
-            for dx, dy in self.ACTIONS.values():
-                nx, ny = x + dx, y + dy
-
-                if (
-                    0 <= nx < self.height
-                    and 0 <= ny < self.width
-                    and not visited[nx, ny]
-                    and grid[nx, ny] == 0
-                ):
-                    visited[nx, ny] = True
-                    queue.append((nx, ny))
-
-        return False
-
-
-    def _sample_free_cell(self):
-        while True:
-            x = random.randint(0, self.height - 1)
-            y = random.randint(0, self.width - 1)
-            if self.grid[x, y] == 0:
-                return (x, y)
-
-    def reset(self):
-        self._apply_curriculum()
         self.steps = 0
 
-        max_attempts = 50
-
-        for _ in range(max_attempts):
-
-            # --------------------------------------------------
-            # Generar grid candidato
-            # --------------------------------------------------
-            if self.randomize_grid:
-                candidate_grid = self._generate_random_grid()
-
-                # Calcular densidad de muros
-                wall_ratio = np.mean(candidate_grid)
-
-                # Evitar mapas demasiado cerrados
-                if wall_ratio > 0.35:
-                    continue
+        if lvl <= 0:
+            # Grid fijo, start/goal fijos
+            if self.fixed_grid_cache is None:
+                self.grid = self._generate_solvable_grid()
+                self.fixed_grid_cache = self.grid.copy()
             else:
-                candidate_grid = self.base_grid.copy()
+                self.grid = self.fixed_grid_cache.copy()
 
-            # --------------------------------------------------
-            # Sampling start / goal
-            # --------------------------------------------------
-            if self.random_start_goal:
-                free_cells = np.argwhere(candidate_grid == 0)
+            self.agent_pos = (0, 0)
+            self.goal_pos = (self.size - 1, self.size - 1)
+            self.grid[self.agent_pos] = 0
+            self.grid[self.goal_pos] = 0
 
-                if len(free_cells) < 2:
-                    continue
-
-                start_idx = random.randint(0, len(free_cells) - 1)
-                goal_idx = random.randint(0, len(free_cells) - 1)
-
-                start = tuple(free_cells[start_idx])
-                goal = tuple(free_cells[goal_idx])
-
-                if start == goal:
-                    continue
-
-                min_distance = (self.height + self.width) // 3
-                if self._manhattan_distance(start, goal) < min_distance:
-                    continue
+        elif lvl == 1:
+            # Grid fijo, start/goal aleatorios
+            if self.fixed_grid_cache is None:
+                self.grid = self._generate_solvable_grid()
+                self.fixed_grid_cache = self.grid.copy()
             else:
-                start = (0, 0)
-                goal = (self.height - 1, self.width - 1)
+                self.grid = self.fixed_grid_cache.copy()
 
-            # --------------------------------------------------
-            # Verificar conectividad
-            # --------------------------------------------------
-            if self._is_reachable(candidate_grid, start, goal):
-                self.grid = candidate_grid
-                self.start = start
-                self.goal = goal
-                break
+            min_dist = int(getattr(self.cfg, "min_bfs_start_goal_lvl1", 0))
+            self.agent_pos, self.goal_pos = self._sample_start_goal_robust(
+                min_bfs=min_dist,
+                max_grid_tries=1,      # grid fijo, no regen
+                max_pair_tries=400,
+                regen_grid_fn=None,    # ✅ nunca regenerar aquí
+            )
+            self.grid[self.agent_pos] = 0
+            self.grid[self.goal_pos] = 0
+
         else:
-            # Fallback seguro
-            self.grid = self.base_grid.copy()
-            self.start = (0, 0)
-            self.goal = (self.height - 1, self.width - 1)
+            # lvl2: grid variable + start/goal aleatorios (pool si activo)
+            min_dist = int(getattr(self.cfg, "min_bfs_start_goal_lvl2", 0))
 
-        # --------------------------------------------------
-        # Inicializar estado
-        # --------------------------------------------------
-        self.agent_pos = list(self.start)
+            # ✅ Centraliza freeze_pool: si freeze_pool=True -> no refresh
+            def _lvl2_grid() -> np.ndarray:
+                return self._sample_or_build_lvl2_grid(
+                    allow_refresh=(not bool(freeze_pool))
+                )
 
-        self.visit_counts = np.zeros(
-            (self.height, self.width),
-            dtype=np.float32
-        )
-        self.visit_counts[self.agent_pos[0], self.agent_pos[1]] += 1
+            self.grid = _lvl2_grid()
 
-        return self._get_state()
+            # Regen grid en lvl2 (si falla encontrar start/goal), respetando freeze_pool
+            self.agent_pos, self.goal_pos = self._sample_start_goal_robust(
+                min_bfs=min_dist,
+                max_grid_tries=30,
+                max_pair_tries=500,
+                regen_grid_fn=_lvl2_grid,
+            )
+            self.grid[self.agent_pos] = 0
+            self.grid[self.goal_pos] = 0
 
+        self.last_bfs_dist = self._bfs_distance(self.agent_pos, self.goal_pos)
 
+        obs = self._get_obs()
+        info: Dict[str, Any] = {
+            "agent_pos": self.agent_pos,
+            "goal_pos": self.goal_pos,
+            "bfs_dist": self.last_bfs_dist,
+            "curriculum_level": lvl,
+            "freeze_pool": bool(freeze_pool),
+        }
+        return obs, info
 
-    def step(self, action: int):
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         self.steps += 1
 
-        dx, dy = self.ACTIONS[action]
-        nx = self.agent_pos[0] + dx
-        ny = self.agent_pos[1] + dy
+        r = float(self.cfg.step_penalty)
+        terminated = False
+        truncated = False
 
-        reward = -0.01  # small living cost
-        done = False
-        info = {"success": False}
+        dr, dc = ACTIONS.get(int(action), (0, 0))
+        ar, ac = self.agent_pos
+        nr, nc = ar + dr, ac + dc
 
-        old_dist = self._manhattan_distance(self.agent_pos, self.goal)
+        invalid = (
+            nr < 0 or nr >= self.size or
+            nc < 0 or nc >= self.size or
+            self.grid[nr, nc] == 1
+        )
 
-        # --------------------------------------------------
-        # Movimiento
-        # --------------------------------------------------
-        if self._is_wall(nx, ny):
-            reward -= 0.15  # reducido (antes 0.3)
+        if invalid:
+            r += float(self.cfg.invalid_move_penalty)
+            new_dist: Optional[int] = self.last_bfs_dist
         else:
-            self.agent_pos = [nx, ny]
+            self.agent_pos = (nr, nc)
+            new_dist = self._bfs_distance(self.agent_pos, self.goal_pos)
 
-            # Bonus por celda nueva
-            if self.visit_counts[nx, ny] == 0:
-                reward += 0.05
-            else:
-                reward -= 0.01
+        if new_dist is None:
+            new_dist = self.last_bfs_dist
 
-            self.visit_counts[nx, ny] += 1
+        if self.last_bfs_dist is not None and new_dist is not None:
+            delta = int(self.last_bfs_dist) - int(new_dist)
+            r += float(self.cfg.progress_reward) * float(delta)
 
-        new_dist = self._manhattan_distance(self.agent_pos, self.goal)
+        self.last_bfs_dist = new_dist
 
-        # --------------------------------------------------
-        # Distance shaping suavizado
-        # --------------------------------------------------
-        if new_dist < old_dist:
-            reward += 0.15   # antes 0.3
-        elif new_dist > old_dist:
-            reward -= 0.05   # antes 0.1
+        if self.agent_pos == self.goal_pos:
+            r += float(self.cfg.goal_reward)
+            terminated = True
 
-        # --------------------------------------------------
-        # Goal
-        # --------------------------------------------------
-        if tuple(self.agent_pos) == self.goal:
-            reward = 20.0   # ligeramente más alto
-            done = True
-            info["success"] = True
+        if self.steps >= int(self.cfg.max_steps) and not terminated:
+            truncated = True
 
-        # --------------------------------------------------
-        # Max steps
-        # --------------------------------------------------
-        if self.steps >= self.max_steps:
-            reward -= 0.5
-            done = True
+        obs = self._get_obs()
+        info: Dict[str, Any] = {
+            "agent_pos": self.agent_pos,
+            "goal_pos": self.goal_pos,
+            "bfs_dist": self.last_bfs_dist,
+            "steps": int(self.steps),
+        }
+        return obs, float(r), bool(terminated), bool(truncated), info
 
-        return self._get_state(), reward, done, info
+    # -------------------------
+    # Obs
+    # -------------------------
+    def _get_obs(self) -> np.ndarray:
+        walls = self.grid.astype(np.float32, copy=False)
+        agent = np.zeros_like(walls, dtype=np.float32)
+        goal = np.zeros_like(walls, dtype=np.float32)
 
+        ar, ac = self.agent_pos
+        gr, gc = self.goal_pos
+        agent[ar, ac] = 1.0
+        goal[gr, gc] = 1.0
 
+        return np.stack([walls, agent, goal], axis=0)
 
-    # ======================================================
+    # -------------------------
+    # Lvl2 pool helpers
+    # -------------------------
+    def _sample_or_build_lvl2_grid(self, force_rebuild: bool = False, allow_refresh: bool = True) -> np.ndarray:
+        pool_size = int(self._lvl2_pool_size)
+        if pool_size <= 0:
+            return self._generate_solvable_grid()
 
-    def _get_state(self):
-        walls = self.grid.astype(np.float32)
+        if bool(force_rebuild):
+            self._lvl2_pool.clear()
 
-        agent_layer = np.zeros_like(walls)
-        agent_layer[self.agent_pos[0], self.agent_pos[1]] = 1.0
+        # Inicializa pool si vacío
+        if len(self._lvl2_pool) == 0:
+            for _ in range(pool_size):
+                self._lvl2_pool.append(self._generate_solvable_grid())
 
-        goal_layer = np.zeros_like(walls)
-        goal_layer[self.goal[0], self.goal[1]] = 1.0
+        # Refresco opcional (diversidad controlada)
+        if bool(allow_refresh) and (self.rng.random() < float(self._lvl2_refresh_prob)):
+            i = int(self.rng.integers(0, len(self._lvl2_pool)))
+            self._lvl2_pool[i] = self._generate_solvable_grid()
 
-        visits = self.visit_counts.copy()
-        if visits.max() > 0:
-            visits = visits / visits.max()
+        # Samplea uno del pool
+        j = int(self.rng.integers(0, len(self._lvl2_pool)))
+        return self._lvl2_pool[j].copy()
 
-        return np.stack([walls, agent_layer, goal_layer, visits], axis=0).astype(np.float32)
+    def _generate_solvable_grid(self) -> np.ndarray:
+        p = float(self.cfg.wall_prob)
+        p_edge = p * 0.6
 
-    def _is_wall(self, x, y):
-        if x < 0 or y < 0 or x >= self.height or y >= self.width:
-            return True
-        return self.grid[x, y] == 1
+        for _ in range(int(self.cfg.max_gen_tries)):
+            grid = (self.rng.random((self.size, self.size)) < p).astype(np.int8)
 
-    def _manhattan_distance(self, a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+            grid[0, :] = (self.rng.random(self.size) < p_edge).astype(np.int8)
+            grid[-1, :] = (self.rng.random(self.size) < p_edge).astype(np.int8)
+            grid[:, 0] = (self.rng.random(self.size) < p_edge).astype(np.int8)
+            grid[:, -1] = (self.rng.random(self.size) < p_edge).astype(np.int8)
+
+            grid[0, 0] = 0
+            grid[self.size - 1, self.size - 1] = 0
+
+            # solvable al menos entre esquinas
+            if self._bfs_distance((0, 0), (self.size - 1, self.size - 1), grid=grid) is not None:
+                return grid
+
+        # fallback ultra-defensivo
+        return np.zeros((self.size, self.size), dtype=np.int8)
+
+    def _sample_start_goal_robust(
+        self,
+        *,
+        min_bfs: int,
+        max_grid_tries: int,
+        max_pair_tries: int,
+        regen_grid_fn: Optional[Callable[[], np.ndarray]] = None,
+    ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        """
+        Intenta samplear (start,goal) con bfs>=min_bfs.
+        Si falla y max_grid_tries>1, regenera grid e intenta de nuevo.
+
+        La regeneración se hace SOLO si regen_grid_fn != None.
+        """
+        min_bfs = int(max(0, min_bfs))
+
+        for _gtry in range(max(1, int(max_grid_tries))):
+            free = np.argwhere(self.grid == 0)
+            if free.shape[0] < 2:
+                # grid degenerado
+                self.grid = np.zeros((self.size, self.size), dtype=np.int8)
+                free = np.argwhere(self.grid == 0)
+
+            for _ in range(int(max_pair_tries)):
+                a = tuple(free[int(self.rng.integers(0, free.shape[0]))])
+                g = tuple(free[int(self.rng.integers(0, free.shape[0]))])
+                if a == g:
+                    continue
+
+                d = self._bfs_distance(a, g)
+                if d is None:
+                    continue
+                if int(d) < int(min_bfs):
+                    continue
+                return a, g
+
+            if regen_grid_fn is not None and int(max_grid_tries) > 1:
+                self.grid = regen_grid_fn()
+
+        # fallback “seguro”
+        self.grid = self._generate_solvable_grid()
+        a = (0, 0)
+        g = (self.size - 1, self.size - 1)
+        self.grid[a] = 0
+        self.grid[g] = 0
+        return a, g
+
+    def _bfs_distance(
+        self,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        grid: Optional[np.ndarray] = None
+    ) -> Optional[int]:
+        g = self.grid if grid is None else grid
+
+        sr, sc = int(start[0]), int(start[1])
+        gr, gc = int(goal[0]), int(goal[1])
+
+        if g[sr, sc] == 1 or g[gr, gc] == 1:
+            return None
+        if (sr, sc) == (gr, gc):
+            return 0
+
+        # ✅ Blindaje por si alguien cambia size/cfg: reconstruye buffers si no coinciden
+        if self._bfs_dist_grid.shape != (self.size, self.size):
+            self._bfs_dist_grid = np.full((self.size, self.size), -1, dtype=np.int16)
+            self._bfs_queue = deque()
+
+        dist = self._bfs_dist_grid
+        dist.fill(-1)
+
+        q = self._bfs_queue
+        q.clear()
+
+        dist[sr, sc] = 0
+        q.append((sr, sc))
+
+        while q:
+            r, c = q.popleft()
+            d = int(dist[r, c])
+
+            for dr, dc in ACTIONS.values():
+                nr, nc = r + dr, c + dc
+                if nr < 0 or nr >= self.size or nc < 0 or nc >= self.size:
+                    continue
+                if g[nr, nc] == 1:
+                    continue
+                if dist[nr, nc] != -1:
+                    continue
+
+                nd = d + 1
+                if (nr, nc) == (gr, gc):
+                    return nd
+
+                dist[nr, nc] = nd
+                q.append((nr, nc))
+
+        return None

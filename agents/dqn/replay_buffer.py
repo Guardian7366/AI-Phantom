@@ -1,181 +1,288 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Deque, List, Tuple, Optional, Any
+from collections import deque
+
 import numpy as np
+import torch
 
 
-# ============================================================
-# SUM TREE
-# ============================================================
+@dataclass
+class NStepTransition:
+    obs: np.ndarray
+    action: int
+    reward: float
+    next_obs: np.ndarray
+    done: bool
+
 
 class SumTree:
     """
-    Binary tree where parent = sum(children).
-    Used for efficient proportional sampling.
+    SumTree clásico:
+      - tree[1] es la raíz (suma total)
+      - hojas están en [capacity, 2*capacity)
+      - data index = leaf_idx - capacity
     """
-
     def __init__(self, capacity: int):
+        capacity = int(capacity)
+        if capacity <= 0:
+            raise ValueError(f"SumTree capacity debe ser > 0. Recibido: {capacity}")
         self.capacity = capacity
-        self.tree = np.zeros(2 * capacity - 1, dtype=np.float32)
-        self.data = np.full(capacity, None, dtype=object)
-        self.size = 0
+
+        # index 0 no se usa; root = 1
+        self.tree = np.zeros(2 * self.capacity, dtype=np.float32)
+        self.data: List[Optional[Any]] = [None] * self.capacity
+
         self.write = 0
-
-    # ---------------------------------------------------------
-
-    def _propagate(self, idx: int, change: float):
-        parent = (idx - 1) // 2
-        self.tree[parent] += change
-
-        if parent != 0:
-            self._propagate(parent, change)
-
-    # ---------------------------------------------------------
-
-    def _retrieve(self, idx: int, s: float) -> int:
-        left = 2 * idx + 1
-        right = left + 1
-
-        if left >= len(self.tree):
-            return idx
-
-        if s <= self.tree[left]:
-            return self._retrieve(left, s)
-        else:
-            return self._retrieve(right, s - self.tree[left])
-
-    # ---------------------------------------------------------
+        self.n_entries = 0
 
     def total(self) -> float:
-        return self.tree[0]
+        return float(self.tree[1])
 
-    # ---------------------------------------------------------
-
-    def add(self, priority: float, data):
-        idx = self.write + self.capacity - 1
-        self.data[self.write] = data
-        self.update(idx, priority)
+    def add(self, priority: float, item: Any):
+        idx = self.write + self.capacity
+        self.data[self.write] = item
+        self.update(idx, float(priority))
 
         self.write = (self.write + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
-
-    # ---------------------------------------------------------
+        self.n_entries = min(self.n_entries + 1, self.capacity)
 
     def update(self, idx: int, priority: float):
-        change = priority - self.tree[idx]
-        self.tree[idx] = priority
-        self._propagate(idx, change)
+        idx = int(idx)
+        priority = float(priority)
 
-    # ---------------------------------------------------------
+        change = priority - float(self.tree[idx])
+        self.tree[idx] = priority
+
+        while idx > 1:
+            idx //= 2
+            self.tree[idx] += change
 
     def get(self, s: float):
-        idx = self._retrieve(0, s)
-        data_idx = idx - self.capacity + 1
-        return idx, self.tree[idx], self.data[data_idx]
+        """
+        s en [0, total]
+        """
+        s = float(s)
+        idx = 1
+        while idx < self.capacity:
+            left = 2 * idx
+            right = left + 1
+            if s <= float(self.tree[left]):
+                idx = left
+            else:
+                s -= float(self.tree[left])
+                idx = right
 
+        data_idx = idx - self.capacity
+        return int(idx), float(self.tree[idx]), self.data[data_idx]
 
-# ============================================================
-# PRIORITIZED REPLAY BUFFER (PROPORTIONAL)
-# ============================================================
+    def reset(self):
+        self.tree.fill(0.0)
+        self.data = [None] * self.capacity
+        self.write = 0
+        self.n_entries = 0
+
 
 class PrioritizedReplayBuffer:
+    """
+    PER + n-step.
+
+    - Cada transición guardada incluye n_steps_real.
+    - El agente debe usar gamma ** n_steps_real.
+
+    sample() retorna:
+      (obs_t, actions_t, rewards_t, next_obs_t, dones_t, n_steps_t, idxs, weights_t)
+    """
 
     def __init__(
         self,
         capacity: int,
         alpha: float = 0.6,
-        epsilon: float = 1e-5
+        beta_start: float = 0.4,
+        beta_frames: int = 200_000,
+        eps: float = 1e-6,
+        n_step: int = 3,
+        gamma: float = 0.99,
+        seed: int = 0,
     ):
-        """
-        alpha: how much prioritization is used (0 = uniform)
-        epsilon: small value to avoid zero priority
-        """
+        capacity = int(capacity)
+        if capacity <= 0:
+            raise ValueError(f"capacity debe ser > 0. Recibido: {capacity}")
+
         self.capacity = capacity
-        self.alpha = alpha
-        self.epsilon = epsilon
+        self.alpha = float(alpha)
+        self.beta_start = float(beta_start)
+        self.beta_frames = int(beta_frames) if int(beta_frames) > 0 else 1
+        self.eps = float(eps) if float(eps) > 0 else 1e-6
 
-        self.tree = SumTree(capacity)
+        self.n_step = int(max(1, n_step))
+        self.gamma = float(gamma)
+        self.nstep_queue: Deque[NStepTransition] = deque(maxlen=self.n_step)
 
+        self.tree = SumTree(self.capacity)
+
+        # nuevas transiciones deben muestrearse; > 0
         self.max_priority = 1.0
+        self.frame = 1
 
-    # ---------------------------------------------------------
+        self.rng = np.random.default_rng(int(seed))
 
-    def push(self, state, action, reward, next_state, done):
+    def reset(self):
+        self.nstep_queue.clear()
+        self.tree.reset()
+        self.max_priority = 1.0
+        self.frame = 1
 
-        data = (state, action, reward, next_state, done)
+    def __len__(self) -> int:
+        return int(self.tree.n_entries)
 
-        # New transitions inserted with max priority
-        priority = self.max_priority
-        self.tree.add(priority, data)
+    def beta(self) -> float:
+        # anneal lineal hasta 1.0
+        t = min(1.0, float(self.frame) / float(self.beta_frames))
+        return float(self.beta_start + t * (1.0 - self.beta_start))
 
-    # ---------------------------------------------------------
+    def _pack_from_queue(self) -> Optional[Tuple[np.ndarray, int, float, np.ndarray, bool, int]]:
+        """
+        Empaqueta una transición n-step desde la cola actual.
+        Retorna:
+          (obs0, action0, R, next_obs_n, done_n, n_steps_real)
+        """
+        if len(self.nstep_queue) == 0:
+            return None
 
-    def sample(self, batch_size: int, beta: float = 0.4):
+        obs0 = self.nstep_queue[0].obs
+        action0 = int(self.nstep_queue[0].action)
 
-        if self.tree.size == 0:
-            raise ValueError("Cannot sample from an empty buffer")
+        R = 0.0
+        done_n = False
+        next_obs_n = self.nstep_queue[-1].next_obs
 
-        batch = []
-        indices = []
-        priorities = []
-
-        total_priority = self.tree.total()
-
-        if total_priority == 0:
-            raise ValueError("SumTree total priority is zero")
-
-        segment = total_priority / batch_size
-
-        for i in range(batch_size):
-            while True:
-                a = segment * i
-                b = segment * (i + 1)
-                s = np.random.uniform(a, b)
-
-                idx, priority, data = self.tree.get(s)
-
-                # 🔥 VALIDACIÓN CRÍTICA
-                data_idx = idx - self.tree.capacity + 1
-
-                if data is None:
-                    continue
-
-                if data_idx < 0 or data_idx >= self.tree.size:
-                    continue
-
+        n_real = 0
+        for i, tr in enumerate(self.nstep_queue):
+            R += (self.gamma ** i) * float(tr.reward)
+            next_obs_n = tr.next_obs
+            n_real = i + 1
+            if tr.done:
+                done_n = True
                 break
 
-            batch.append(data)
-            indices.append(idx)
-            priorities.append(priority)
+        return obs0, action0, float(R), next_obs_n, bool(done_n), int(n_real)
 
-        states, actions, rewards, next_states, dones = zip(*batch)
+    def _sanitize_priority(self, p: float) -> float:
+        p = float(p)
+        if (not np.isfinite(p)) or p <= 0.0:
+            p = 1.0
+        return max(p, float(self.eps))
 
-        sampling_probabilities = np.array(priorities, dtype=np.float32) / total_priority
+    def _add_packed(self, packed):
+        p = self._sanitize_priority(self.max_priority)
+        self.tree.add(p, packed)
 
-        weights = (self.tree.size * sampling_probabilities) ** (-beta)
-        weights /= weights.max()
+    def push(self, obs: np.ndarray, action: int, reward: float, next_obs: np.ndarray, done: bool):
+        # ✅ blindaje: evita referencias mutables (barato para 3x8x8)
+        obs_c = np.array(obs, copy=True)
+        next_obs_c = np.array(next_obs, copy=True)
 
-        return (
-            np.array(states, dtype=np.float32),
-            np.array(actions, dtype=np.int64),
-            np.array(rewards, dtype=np.float32),
-            np.array(next_states, dtype=np.float32),
-            np.array(dones, dtype=np.float32),
-            indices,
-            weights.astype(np.float32),
-        )
+        self.nstep_queue.append(NStepTransition(obs_c, int(action), float(reward), next_obs_c, bool(done)))
 
+        # Cuando está llena, añadimos 1 transición “normal”
+        if len(self.nstep_queue) >= self.n_step:
+            packed = self._pack_from_queue()
+            if packed is not None:
+                self._add_packed(packed)
+            self.nstep_queue.popleft()
 
-    # ---------------------------------------------------------
+        # Si terminó el episodio, flush de lo que queda
+        if bool(done):
+            self._flush()
 
-    def update_priorities(self, indices, td_errors):
+    def _flush(self):
+        while len(self.nstep_queue) > 0:
+            packed = self._pack_from_queue()
+            if packed is not None:
+                self._add_packed(packed)
+            self.nstep_queue.popleft()
 
-        td_errors = np.abs(td_errors) + self.epsilon
+    def sample(self, batch_size: int, device: torch.device):
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError(f"batch_size debe ser > 0. Recibido: {batch_size}")
 
-        for idx, error in zip(indices, td_errors):
-            priority = (error ** self.alpha)
-            self.tree.update(idx, priority)
-            self.max_priority = max(self.max_priority, priority)
+        self.frame += 1
 
-    # ---------------------------------------------------------
+        if len(self) == 0:
+            raise RuntimeError("PER buffer vacío: no se puede samplear.")
 
-    def __len__(self):
-        return self.tree.size
+        total = float(self.tree.total())
+        if (not np.isfinite(total)) or total <= 0.0:
+            raise RuntimeError(f"PER SumTree total inválido: total={total}")
+
+        segment = total / float(batch_size)
+
+        idxs: List[int] = []
+        priorities: List[float] = []
+        samples: List[Tuple[np.ndarray, int, float, np.ndarray, bool, int]] = []
+
+        for i in range(batch_size):
+            a = segment * i
+            b = segment * (i + 1)
+
+            found = False
+            for _retry in range(25):
+                s = float(self.rng.uniform(a, b))
+                idx, p, data = self.tree.get(s)
+
+                # fallback global si sale basura
+                if data is None or (not np.isfinite(p)) or p <= 0.0:
+                    s2 = float(self.rng.uniform(0.0, total))
+                    idx, p, data = self.tree.get(s2)
+
+                if data is not None and np.isfinite(p) and p > 0.0:
+                    idxs.append(int(idx))
+                    priorities.append(float(p))
+                    samples.append(data)
+                    found = True
+                    break
+
+            if not found:
+                raise RuntimeError("No se pudo samplear una transición válida del PER (hojas vacías / inválidas).")
+
+        probs = np.array(priorities, dtype=np.float32) / float(total + 1e-8)
+        probs = np.clip(probs, 1e-8, 1.0)
+
+        beta = float(self.beta())
+        weights = (float(len(self)) * probs) ** (-beta)
+        weights /= (weights.max() + 1e-8)
+        weights = np.nan_to_num(weights, nan=1.0, posinf=1.0, neginf=1.0).astype(np.float32, copy=False)
+
+        weights_t = torch.tensor(weights, dtype=torch.float32, device=device)
+
+        obs, actions, rewards, next_obs, dones, n_steps = zip(*samples)
+
+        obs_np = np.stack(obs, axis=0).astype(np.float32, copy=False)
+        next_obs_np = np.stack(next_obs, axis=0).astype(np.float32, copy=False)
+
+        obs_t = torch.from_numpy(obs_np).to(device=device)
+        next_obs_t = torch.from_numpy(next_obs_np).to(device=device)
+
+        actions_t = torch.tensor(actions, dtype=torch.int64, device=device).unsqueeze(1)
+        rewards_t = torch.tensor(rewards, dtype=torch.float32, device=device).unsqueeze(1)
+        dones_t = torch.tensor(dones, dtype=torch.float32, device=device).unsqueeze(1)
+
+        # ✅ n real por transición (para gamma**n_real)
+        n_steps_t = torch.tensor(n_steps, dtype=torch.int64, device=device).unsqueeze(1)
+
+        return (obs_t, actions_t, rewards_t, next_obs_t, dones_t, n_steps_t, idxs, weights_t)
+
+    def update_priorities(self, idxs: List[int], priorities: np.ndarray):
+        priorities = np.asarray(priorities, dtype=np.float32)
+
+        # td_error -> priority
+        priorities = np.abs(priorities) + float(self.eps)
+        priorities = priorities ** float(self.alpha)
+
+        for idx, p in zip(idxs, priorities):
+            p = self._sanitize_priority(float(p))
+            self.tree.update(int(idx), p)
+            self.max_priority = max(float(self.max_priority), float(p))

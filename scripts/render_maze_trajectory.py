@@ -1,110 +1,72 @@
-# scripts/render_maze_trajectory.py
+import argparse
+import os
+import time
+import torch
 
-import yaml
-from pathlib import Path
-
-from environments.maze.maze_env import MazeEnvironment
-from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import PrioritizedReplayBuffer
-
-
-ROOT = Path(__file__).resolve().parents[1]
+from environments.maze.maze_env import MazeEnvironment, MazeConfig
+from agents.dqn.dqn_agent import DQNAgent, DQNConfig
 
 
-def load_config():
-    cfg_path = ROOT / "configs" / "maze_inference.yaml"
-    with open(cfg_path, "r") as f:
-        return yaml.safe_load(f)
-
-
-def render_with_trajectory(env: MazeEnvironment, trajectory: list[tuple[int, int]]):
-    """
-    Renderiza el laberinto con la trayectoria superpuesta.
-    """
-    grid = env.grid
-    start = tuple(env.start)
-    goal = tuple(env.goal)
-
-    rows, cols = grid.shape
-    canvas = []
-
-    trajectory_set = set(trajectory[1:-1])  # sin inicio ni goal
-
-    for r in range(rows):
-        line = ""
-        for c in range(cols):
-            pos = (r, c)
-
-            if pos == start:
-                line += "S"
-            elif pos == goal:
-                line += "G"
-            elif pos in trajectory_set:
-                line += "*"
-            elif grid[r, c] == 1:
-                line += "#"
+def render_ascii(env: MazeEnvironment) -> str:
+    lines = []
+    for r in range(env.size):
+        row = []
+        for c in range(env.size):
+            if (r, c) == env.agent_pos:
+                row.append("A")
+            elif (r, c) == env.goal_pos:
+                row.append("G")
+            elif env.grid[r, c] == 1:
+                row.append("#")
             else:
-                line += "."
-        canvas.append(line)
-
-    print("\n".join(canvas))
+                row.append(".")
+        lines.append("".join(row))
+    return "\n".join(lines)
 
 
 def main():
-    print("=== Render Maze Trajectory ===")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint_dir", type=str, required=True)
+    ap.add_argument("--which", type=str, default="best", choices=["best", "last"])
+    ap.add_argument("--level", type=int, default=2)
+    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--delay", type=float, default=0.05)
+    args = ap.parse_args()
 
-    config = load_config()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ----------------------------
-    # Environment
-    # ----------------------------
-    env = MazeEnvironment(config["environment"])
-    state_dim = env.observation_space
-    action_dim = env.action_space
+    env = MazeEnvironment(MazeConfig(), rng_seed=args.seed)
+    agent = DQNAgent(DQNConfig(), device=device)
 
-    # ----------------------------
-    # Agent
-    # ----------------------------
-    replay_buffer = PrioritizedReplayBuffer(capacity=1)  # dummy
+    model_file = "best_model.pth" if args.which == "best" else "last_model.pth"
+    model_path = os.path.join(args.checkpoint_dir, model_file)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(model_path)
 
-    agent_cfg = dict(config.get("agent", {}))
-    agent_cfg.pop("type", None)      # metadata
-    agent_cfg.pop("epsilon", None)   # no pertenece al init
+    sd = torch.load(model_path, map_location=device)
+    agent.q.load_state_dict(sd)
+    agent.q_tgt.load_state_dict(sd)
+    agent.q.eval()
 
-    agent = DQNAgent(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        replay_buffer=replay_buffer,
-        **agent_cfg,
-    )
-
-    agent.set_mode(training=False)
-
-    ckpt_path = ROOT / "results" / "best_model" / "best_model.pth"
-    agent.load(str(ckpt_path))
-
-    # ----------------------------
-    # Run episode & record path
-    # ----------------------------
-    state = env.reset()
-    trajectory = [tuple(env.agent_pos)]
-
+    obs, info = env.reset(curriculum_level=args.level, seed=args.seed)
     done = False
+    trunc = False
     step = 0
-    max_steps = config["environment"].get("max_steps", 100)
 
-    while not done and step < max_steps:
-        action = agent.select_action(state, epsilon=0.0)
-        state, reward, done, info = env.step(action)
+    print("Initial:")
+    print(render_ascii(env))
+    print("-" * 20)
 
-        trajectory.append(tuple(env.agent_pos))
+    while not (done or trunc):
+        a = agent.act(obs, deterministic=True)
+        obs, r, done, trunc, info = env.step(a)
         step += 1
+        print(f"Step {step} | a={a} r={r:.3f} done={done} trunc={trunc}")
+        print(render_ascii(env))
+        print("-" * 20)
+        time.sleep(args.delay)
 
-    print("\n--- Trayectoria final ---")
-    render_with_trajectory(env, trajectory)
-
-    print("\nSteps:", step)
-    print("Success:", info.get("success", False))
+    print("Finished.")
 
 
 if __name__ == "__main__":

@@ -1,145 +1,83 @@
+import argparse
 import os
 import json
-import yaml
+import torch
+import numpy as np
 
-from environments.maze.maze_env import MazeEnvironment
-from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.replay_buffer import PrioritizedReplayBuffer
-from controllers.inference_controller import InferenceController
+from environments.maze.maze_env import MazeEnvironment, MazeConfig
+from agents.dqn.dqn_agent import DQNAgent, DQNConfig
 
-
-# -------------------------------------------------
-# Utils
-# -------------------------------------------------
-
-def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-# -------------------------------------------------
-# Main
-# -------------------------------------------------
 
 def main():
-    print("\n=== Collect Trajectories: Best Model ===")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint_dir", type=str, required=True)
+    ap.add_argument("--which", type=str, default="best", choices=["best", "last"])
+    ap.add_argument("--level", type=int, default=2)
+    ap.add_argument("--episodes", type=int, default=50)
+    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--out", type=str, default="results/trajectories/trajectories.json")
+    args = ap.parse_args()
 
-    config_path = "configs/maze_inference.yaml"
-    output_dir = "results/trajectories"
-    output_path = os.path.join(output_dir, "best_model_trajectories.json")
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
-    os.makedirs(output_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    env = MazeEnvironment(MazeConfig(), rng_seed=args.seed)
+    agent = DQNAgent(DQNConfig(), device=device)
 
-    # ----------------------------
-    # Load config
-    # ----------------------------
+    model_file = "best_model.pth" if args.which == "best" else "last_model.pth"
+    model_path = os.path.join(args.checkpoint_dir, model_file)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(model_path)
 
-    cfg = load_config(config_path)
+    sd = torch.load(model_path, map_location=device)
+    agent.q.load_state_dict(sd)
+    agent.q_tgt.load_state_dict(sd)
+    agent.q.eval()
 
-    # ----------------------------
-    # Environment
-    # ----------------------------
-
-    env = MazeEnvironment(config=cfg["environment"])
-
-
-    # ----------------------------
-    # Agent (inferencia pura)
-    # ----------------------------
-
-    raw_agent_cfg = cfg.get("agent", {})
-    agent_cfg = {
-        k: v
-        for k, v in raw_agent_cfg.items()
-        if k not in {"type", "epsilon"}
-    }
-
-    replay_buffer = PrioritizedReplayBuffer(capacity=1)
-
-    agent = DQNAgent(
-        state_dim=env.state_dim,
-        action_dim=env.action_space_n,
-        replay_buffer=replay_buffer,
-        gamma=agent_cfg.get("gamma", 0.99),
-        lr=agent_cfg.get("learning_rate", 1e-4),
-        batch_size=agent_cfg.get("batch_size", 64),
-        min_replay_size=agent_cfg.get("min_replay_size", 1),
-        update_frequency=agent_cfg.get("update_frequency", 4),
-    )
-
-
-    agent.set_mode(training=False)
-
-    # ----------------------------
-    # Controller
-    # ----------------------------
-
-    model_cfg = cfg.get("model", {})
-    model_path = model_cfg.get("path")
-
-    if model_path is None:
-        raise RuntimeError("model.path not defined in config")
-
-    controller = InferenceController(
-        env=env,
-        agent=agent,
-        model_path=model_path,
-        num_episodes=5,
-        max_steps_per_episode=cfg.get("environment", {}).get("max_steps", 500),
-        render=False,
-    )
-
-    # ----------------------------
-    # Run & collect trajectories
-    # ----------------------------
+    rng = np.random.default_rng(args.seed)
 
     trajectories = []
-
-    for ep in range(controller.num_episodes):
-        state = controller.env.reset()
+    for ep in range(args.episodes):
+        obs, info = env.reset(curriculum_level=args.level, seed=int(rng.integers(0, 10_000_000)))
         done = False
+        trunc = False
 
-        episode_data = {
+        traj = {
             "episode": ep,
-            "positions": [],
-            "rewards": [],
-            "success": False,
+            "grid": env.grid.tolist(),
+            "start": list(env.agent_pos),
+            "goal": list(env.goal_pos),
+            "steps": []
         }
 
-        steps = 0
+        while not (done or trunc):
+            a = agent.act(obs, deterministic=True)
+            prev_pos = env.agent_pos
+            obs, r, done, trunc, info = env.step(a)
+            traj["steps"].append({
+                "action": int(a),
+                "reward": float(r),
+                "from": list(prev_pos),
+                "to": list(env.agent_pos),
+                "done": bool(done),
+                "trunc": bool(trunc),
+            })
 
-        # 🔑 USAR controller.max_steps (NO max_steps_per_episode)
-        while not done and steps < controller.max_steps:
-            episode_data["positions"].append(
-                tuple(controller.env.agent_pos)
-            )
+        trajectories.append(traj)
 
-            action = controller.agent.select_action(state, epsilon=0.0)
-            next_state, reward, done, info = controller.env.step(action)
+    payload = {
+        "checkpoint_dir": args.checkpoint_dir,
+        "which": args.which,
+        "level": args.level,
+        "episodes": args.episodes,
+        "seed": args.seed,
+        "trajectories": trajectories
+    }
 
-            episode_data["rewards"].append(reward)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 
-            if info.get("success", False):
-                episode_data["success"] = True
-
-            state = next_state
-            steps += 1
-
-        trajectories.append(episode_data)
-
-    # ----------------------------
-    # Save
-    # ----------------------------
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(trajectories, f, indent=2)
-
-    print(f"[OK] Trajectories saved to: {output_path}")
-
-    for t in trajectories:
-        print(
-            f"Ep {t['episode']} | Steps: {len(t['positions'])} | Success: {t['success']}"
-        )
+    print(f"Saved: {args.out}")
 
 
 if __name__ == "__main__":
