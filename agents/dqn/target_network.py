@@ -1,10 +1,21 @@
+# agents/dqn/target_network.py
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 
 
 class TargetNetwork:
-    def __init__(self, online: nn.Module):
-        self.net = online
+    """
+    Wrapper opcional para actualizaciones de red target.
+
+    Nota:
+    - En tu implementación actual, DQNAgent ya maneja self.q_tgt y soft_update().
+    - Este wrapper existe por compatibilidad con código viejo y herramientas externas.
+    """
+
+    def __init__(self, target: nn.Module):
+        self.net = target
 
     @torch.no_grad()
     def hard_update_from(self, source: nn.Module):
@@ -12,5 +23,6 @@ class TargetNetwork:
 
     @torch.no_grad()
     def soft_update_from(self, source: nn.Module, tau: float):
-        for p, pt in zip(source.parameters(), self.net.parameters()):
-            pt.data.mul_(1.0 - tau).add_(tau * p.data)
+        tau = float(tau)
+        for p_src, p_tgt in zip(source.parameters(), self.net.parameters()):
+            p_tgt.data.mul_(1.0 - tau).add_(tau * p_src.data)

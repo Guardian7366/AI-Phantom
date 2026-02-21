@@ -1,0 +1,63 @@
+seed: 42
+env_seed: 42
+device: auto
+deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+snapshot_dir: results/snapshots
+env:
+  size: 8
+  wall_prob: 0.26
+  max_gen_tries: 200
+  max_steps: 128
+  step_penalty: -0.01
+  invalid_move_penalty: -0.02
+  goal_reward: 1.0
+  progress_reward: 0.025
+  revisit_penalty: 0.0015
+  new_cell_bonus: 0.0005
+  min_bfs_start_goal_lvl1: 2
+  min_bfs_start_goal_lvl2: 5
+  lvl2_grid_pool_size: 128
+  lvl2_pool_refresh_prob: 0.05
+stoch:
+  enabled: false
+agent:
+  num_actions: 4
+  seed: 42
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  target_kl: 0.02
+  target_kl_multiplier: 1.5
+  clip_value_loss: true
+  value_clip_eps: 0.2
+  lr: 0.00025
+  weight_decay: 0.0
+  max_grad_norm: 0.5
+  use_amp: true
+  ppo_epochs: 4
+  minibatch_size: 256
+train:
+  run_name: maze_ppo_lvl2_gold
+  results_dir: results/runs
+  checkpoint_dir: results/checkpoints
+  seed: 42
+  num_updates: 3000
+  rollout_steps: 2048
+  max_steps_per_episode: 128
+  eval_every_updates: 20
+  eval_episodes_quick: 160
+  eval_episodes: 400
+  eval_full_every_evals: 3
+  success_window: 300
+  min_samples_to_advance: 300
+  advance_threshold: 0.985
+  curriculum_max_level: 2
+  mix_next_prob_step: 0.1
+  mix_next_prob_cap: 0.6
+  interleave_lower_prob: 0.22
+  interleave_lower_min_level: 1
+  save_last_every_updates: 20

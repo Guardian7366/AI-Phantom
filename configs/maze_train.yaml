@@ -1,84 +1,158 @@
 # configs/maze_train.yaml
+# FASE 2.9.x – objetivo: generalizar y ganar lvl2 de forma rotunda
+
 seed: 42
-device: "auto"          # "auto" | "cuda" | "cpu"
+device: "auto"
+
+deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+
+env_seed: 42
+snapshot_dir: "results/snapshots"
 
 env:
   size: 8
-  wall_prob: 0.24
+  wall_prob: 0.26
   max_gen_tries: 200
   max_steps: 128
 
-  # Rewards (más señal para lvl2)
+  # Rewards
   step_penalty: -0.01
   invalid_move_penalty: -0.02
   goal_reward: 1.0
-  progress_reward: 0.02   # ✅ subir señal (0.01 suele ser lento en lvl2)
+  progress_reward: 0.03
+
+  # Anti-loop
+  revisit_penalty: 0.002
+  new_cell_bonus: 0.0005
 
   # Distancia mínima start-goal
   min_bfs_start_goal_lvl1: 2
   min_bfs_start_goal_lvl2: 4
 
-  # Pool lvl2 (más estable para consolidar)
+  # Pool lvl2
   lvl2_grid_pool_size: 64
-  lvl2_pool_refresh_prob: 0.05  # ✅ menos ruido que 0.10
+  lvl2_pool_refresh_prob: 0.04
+
+  # ✅ Paso 2: familias / mixture curriculum
+  families:
+    enabled: true
+
+    # parámetros por familia (opcional por familia)
+    registry:
+      bernoulli:
+        wall_prob: 0.26
+        edge_wall_scale: 0.6
+
+      rooms:
+        wall_prob: 0.22
+        rooms_min: 2
+        rooms_max: 5
+        room_min_size: 2
+        room_max_size: 4
+        corridor_width: 1
+
+      corridors:
+        wall_prob: 0.28
+        walkers: 3
+        walk_steps_scale: 2.2
+
+    # mezcla por curriculum_level
+    mixture:
+      lvl0:
+        bernoulli: 1.0
+      lvl1:
+        bernoulli: 0.85
+        rooms: 0.15
+      lvl2:
+        bernoulli: 0.45
+        rooms: 0.35
+        corridors: 0.20
 
 agent:
   seed: 42
   num_actions: 4
 
   gamma: 0.99
-  lr: 0.0002              # ✅ ligeramente más estable que 2.5e-4
+  lr: 0.00025
   batch_size: 64
   replay_size: 60000
 
-  # Double DQN + target
   tau: 0.005
 
-  # PER + n-step
   per_alpha: 0.6
   per_beta_start: 0.4
-  per_beta_frames: 400000  # ✅ anneal más largo -> menos sacudidas
+  per_beta_frames: 200000
   n_step: 5
+  per_priority_clip: 10.0
 
-  # Epsilon schedule (steps)
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 500000  # ✅ más exploración para lvl2
+  epsilon_decay_steps: 300000
 
-  # Training
-  warmup_steps: 2000
+  warmup_steps: 2500
   update_every: 1
   grad_clip_norm: 10.0
   use_amp: true
 
+  auto_explore_boost_on_td: false
+  auto_explore_td_threshold: 5.0
+  auto_explore_value: 0.35
+  auto_explore_steps: 1500
+
+stoch:
+  enabled: false
+
 train:
-  run_name: "maze_dqn_rainbowlite_lvl2_lock"
-  num_episodes: 6000           # ✅ un poco más para consolidar lvl2
+  run_name: "maze_dqn_rainbowlite_lvl2_lock_v3"
+  num_episodes: 6000
   max_steps_per_episode: 128
 
   results_dir: "results/runs"
   checkpoint_dir: "results/checkpoints"
 
-  # Eval (señal limpia para best_lvl2)
   eval_every_episodes: 100
-  eval_episodes: 600            # ✅ menos varianza que 400
+  eval_episodes: 250
+  eval_episodes_quick: 120
+  eval_full_every_evals: 3
 
-  # Curriculum
   success_window: 200
+  min_samples_to_advance: 200
   advance_threshold: 0.98
   curriculum_max_level: 2
 
-  # Anti “pozo” al avanzar
   epsilon_reset_on_advance: true
   epsilon_reset_value: 0.35
-  epsilon_reset_steps: 35000     # ✅ un poco más largo
+  epsilon_reset_steps: 25000
   reset_replay_on_advance: false
 
-  # Rescate lvl2 (más estable / menos spam)
+  interleave_lower_prob: 0.18
+  interleave_lower_min_level: 1
+
   rescue_on_stuck: true
   rescue_level: 2
-  rescue_sr_threshold: 0.65      # ✅ si cae por debajo de esto sostenido -> rescate
-  rescue_patience_episodes: 300
-  rescue_epsilon_value: 0.30
+  rescue_sr_threshold: 0.62
+  rescue_patience_episodes: 160
+  rescue_epsilon_value: 0.40
   rescue_epsilon_steps: 35000
-  rescue_cooldown_episodes: 400
+  rescue_cooldown_episodes: 350
+
+  rescue_ratio_threshold: 3.0
+
+pretrain_bc:
+  enabled: true
+  dataset_path: "results/expert_dataset/maze_expert_bc.npz"
+
+  # opcional: si no lo pones, se guarda en el snapshot del run
+  # save_path: "results/expert_dataset/pretrained_bc.pth"
+
+  epochs: 5
+  batch_size: 256
+  lr: 0.0001
+  weight_decay: 0.0
+  grad_clip_norm: 5.0
+  use_amp: true
+  num_workers: 0
+  shuffle: true
+  seed: 42

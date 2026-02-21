@@ -1,0 +1,16 @@
+{
+  "yaml_path": "configs/maze_train_ppo.yaml",
+  "device": "cuda",
+  "train_seed": 42,
+  "env_seed": 42,
+  "agent_seed": 42,
+  "stoch_enabled": false,
+  "stoch_meta": null,
+  "torch_flags": {
+    "deterministic": false,
+    "cudnn_benchmark": true,
+    "cudnn_deterministic": false,
+    "allow_tf32": true
+  },
+  "notes": "PPO run snapshot: resolved_config.yaml + run_meta.json"
+}

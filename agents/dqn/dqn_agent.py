@@ -29,6 +29,7 @@ class DQNConfig:
     per_beta_start: float = 0.4
     per_beta_frames: int = 200_000
     n_step: int = 5
+    per_priority_clip: Optional[float] = None  # clip opcional para estabilidad lvl2
 
     # Epsilon-greedy
     epsilon_start: float = 1.0
@@ -46,6 +47,12 @@ class DQNConfig:
     # seed para PER sampling + RNG del agente
     seed: int = 0
 
+    # (Opcional) boost automático si hay señales de inestabilidad
+    auto_explore_boost_on_td: bool = False
+    auto_explore_td_threshold: float = 5.0
+    auto_explore_value: float = 0.35
+    auto_explore_steps: int = 1500
+
 
 class DQNAgent:
     def __init__(self, cfg: Optional[DQNConfig] = None, device: Optional[torch.device] = None):
@@ -55,6 +62,7 @@ class DQNAgent:
         # RNG propio (reproducible) + seeds torch
         seed = int(getattr(self.cfg, "seed", 0))
         self.rng = np.random.default_rng(seed)
+
         torch.manual_seed(seed)
         if self.device.type == "cuda":
             torch.cuda.manual_seed_all(seed)
@@ -75,22 +83,21 @@ class DQNAgent:
             n_step=int(self.cfg.n_step),
             gamma=float(self.cfg.gamma),
             seed=seed,
+            priority_clip=getattr(self.cfg, "per_priority_clip", None),
         )
 
         # AMP: solo si CUDA
         use_amp = bool(self.cfg.use_amp and self.device.type == "cuda")
         if use_amp:
-            # torch.amp.GradScaler(device="cuda", enabled=True) (PyTorch >= 2)
             self.scaler = torch.amp.GradScaler("cuda", enabled=True)
         else:
-            # No-op scaler (más compatible que pasar "cuda" cuando estás en cpu)
             self.scaler = torch.amp.GradScaler(enabled=False)
 
         # Contadores
         self.total_steps = 0  # pasos de entorno (incrementa en remember)
         self.epsilon = float(self.cfg.epsilon_start)
 
-        # Cache gamma como tensor
+        # Cache gamma
         g = float(self.cfg.gamma)
         self._gamma_t = torch.tensor(g, device=self.device, dtype=torch.float32)
         self._log_gamma = math.log(g) if 0.0 < g < 1.0 else None
@@ -102,7 +109,7 @@ class DQNAgent:
         self._eps_boost_value = 0.0
 
     # -------------------------
-    # Modo (opcional) explícito
+    # Modo explícito (usado por controllers)
     # -------------------------
     def train_mode(self):
         self.q.train()
@@ -115,12 +122,15 @@ class DQNAgent:
     # Epsilon schedule
     # -------------------------
     def _schedule_epsilon(self) -> float:
-        # lineal de start -> end
         t = min(1.0, self.total_steps / float(self.cfg.epsilon_decay_steps))
         eps = float(self.cfg.epsilon_start + t * (self.cfg.epsilon_end - self.cfg.epsilon_start))
         return float(np.clip(eps, 0.0, 1.0))
 
     def _apply_epsilon_boost(self, eps_sched: float) -> float:
+        """
+        ✅ FIX CRÍTICO: el boost debe DECER hacia eps_sched.
+        Antes: max(..., boost_value) lo dejaba pegado en boost_value.
+        """
         if not self._eps_boost_active:
             return eps_sched
 
@@ -131,8 +141,10 @@ class DQNAgent:
         span = max(1, self._eps_boost_end_step - self._eps_boost_start_step)
         u = (self.total_steps - self._eps_boost_start_step) / float(span)
 
-        eps_boost = float((1.0 - u) * self._eps_boost_value + u * eps_sched)
-        eps = max(eps_boost, eps_sched, float(self._eps_boost_value))
+        # Interpolación lineal: boost_value -> eps_sched
+        eps = float((1.0 - u) * self._eps_boost_value + u * eps_sched)
+        # Nunca menos que el schedule
+        eps = max(eps, float(eps_sched))
         return float(np.clip(eps, 0.0, 1.0))
 
     def _update_epsilon(self):
@@ -140,10 +152,12 @@ class DQNAgent:
         self.epsilon = self._apply_epsilon_boost(eps_sched)
 
     def _start_epsilon_boost(self, *, value: float, steps: int):
+        v = float(np.clip(value, 0.0, 1.0))
+        s = max(1, int(steps))
         self._eps_boost_active = True
         self._eps_boost_start_step = int(self.total_steps)
-        self._eps_boost_end_step = int(self.total_steps + max(1, int(steps)))
-        self._eps_boost_value = float(value)
+        self._eps_boost_end_step = int(self.total_steps + s)
+        self._eps_boost_value = v
 
     def on_curriculum_advanced(
         self,
@@ -169,16 +183,16 @@ class DQNAgent:
     # -------------------------
     @torch.no_grad()
     def act(self, obs: np.ndarray, deterministic: bool = False) -> int:
-        x = torch.tensor(obs[None, ...], dtype=torch.float32, device=self.device)
+        # ✅ torch.as_tensor evita copias innecesarias cuando obs ya es float32
+        x = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
         if deterministic:
-            # ✅ blindaje: si la red tiene dropout/BN, esto hace greedy consistente
-            was_training = self.q.training
-            if was_training:
+            was_train = self.q.training
+            if was_train:
                 self.q.eval()
             q = self.q(x)
             a = int(torch.argmax(q, dim=1).item())
-            if was_training:
+            if was_train:
                 self.q.train()
             return a
 
@@ -213,6 +227,17 @@ class DQNAgent:
             return torch.exp(n_steps_t.float() * float(self._log_gamma))
         return torch.pow(self._gamma_t, n_steps_t.float())
 
+    @staticmethod
+    def _grad_norm(params) -> float:
+        tot = 0.0
+        for p in params:
+            if p.grad is None:
+                continue
+            g = p.grad.detach()
+            if torch.isfinite(g).all():
+                tot += float(g.norm(2).item()) ** 2
+        return float(math.sqrt(tot))
+
     def learn(self) -> Dict[str, Any]:
         # Warmup
         if len(self.buffer) < int(self.cfg.warmup_steps):
@@ -231,17 +256,23 @@ class DQNAgent:
         with torch.amp.autocast(device_type=self.device.type, enabled=autocast_enabled):
             q_values = self.q(obs_t).gather(1, actions_t)
 
-            # Target Double DQN sin gradiente
             with torch.no_grad():
-                next_actions = torch.argmax(self.q(next_obs_t), dim=1, keepdim=True)
-                next_q = self.q_tgt(next_obs_t).gather(1, next_actions)
+                # Double DQN: acción por online, valor por target
+                q_next_online = self.q(next_obs_t)
+                next_actions = torch.argmax(q_next_online, dim=1, keepdim=True)
 
+                next_q = self.q_tgt(next_obs_t).gather(1, next_actions)
                 gamma_n = self._gamma_pow_n(n_steps_t)
+
+                # dones_t se espera (B,1) float 0/1, igual que rewards_t
                 target = rewards_t + (1.0 - dones_t) * gamma_n * next_q
 
-            td_error = (q_values - target).detach()  # (B,1)
-            loss_per_item = self.loss_fn(q_values, target)  # (B,1)
-            loss = (loss_per_item * weights_t.unsqueeze(1)).mean()
+            td_error = (q_values - target).detach()              # (B,1)
+            loss_per_item = self.loss_fn(q_values, target)       # (B,1)
+            w = weights_t
+            if w.dim() == 1:
+                w = w.unsqueeze(1)
+            loss = (loss_per_item * w).mean()
 
             if not torch.isfinite(loss):
                 self.optim.zero_grad(set_to_none=True)
@@ -258,16 +289,96 @@ class DQNAgent:
         self.scaler.unscale_(self.optim)
         torch.nn.utils.clip_grad_norm_(self.q.parameters(), float(self.cfg.grad_clip_norm))
 
+        grad_norm = self._grad_norm(self.q.parameters())
+
         self.scaler.step(self.optim)
         self.scaler.update()
 
         # priorities = |td_error|
-        self.buffer.update_priorities(idxs, td_error.squeeze(1).cpu().numpy())
+        td_np = td_error.squeeze(1).detach().abs().cpu().numpy()
+        self.buffer.update_priorities(idxs, td_np)
+
+        td_abs_mean = float(np.mean(td_np)) if td_np.size else float("nan")
+
         self.soft_update()
+
+        # Auto-boost opcional (apagado por default)
+        if bool(getattr(self.cfg, "auto_explore_boost_on_td", False)) and np.isfinite(td_abs_mean):
+            if td_abs_mean >= float(getattr(self.cfg, "auto_explore_td_threshold", 5.0)):
+                self._start_epsilon_boost(
+                    value=float(getattr(self.cfg, "auto_explore_value", 0.35)),
+                    steps=int(getattr(self.cfg, "auto_explore_steps", 1500)),
+                )
 
         return {
             "loss": float(loss.item()),
             "epsilon": float(self.epsilon),
             "buffer_len": int(len(self.buffer)),
             "beta": float(self.buffer.beta()),
+            "td_abs_mean": float(td_abs_mean),
+            "q_mean": float(q_values.detach().mean().item()),
+            "target_mean": float(target.detach().mean().item()),
+            "grad_norm": float(grad_norm),
         }
+
+    # -------------------------
+    # Reproducibilidad / sandbox
+    # -------------------------
+    def get_state(self) -> Dict[str, Any]:
+        st: Dict[str, Any] = {
+            "total_steps": int(self.total_steps),
+            "epsilon": float(self.epsilon),
+            "rng_state": self.rng.bit_generator.state,
+
+            # ✅ extra para reproducibilidad fuerte (sandbox)
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_state_all": torch.cuda.get_rng_state_all() if self.device.type == "cuda" else None,
+
+            "q_state": {k: v.detach().cpu() for k, v in self.q.state_dict().items()},
+            "q_tgt_state": {k: v.detach().cpu() for k, v in self.q_tgt.state_dict().items()},
+            "optim_state": self.optim.state_dict(),
+
+            "eps_boost": {
+                "active": bool(self._eps_boost_active),
+                "start": int(self._eps_boost_start_step),
+                "end": int(self._eps_boost_end_step),
+                "value": float(self._eps_boost_value),
+            },
+        }
+        if hasattr(self.buffer, "get_state"):
+            st["buffer_state"] = self.buffer.get_state()
+        return st
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        self.total_steps = int(state["total_steps"])
+        self.epsilon = float(state["epsilon"])
+
+        self.rng = np.random.default_rng(0)
+        self.rng.bit_generator.state = state["rng_state"]
+
+        # ✅ restaurar RNG torch/cuda si están presentes
+        if "torch_rng_state" in state and state["torch_rng_state"] is not None:
+            torch.set_rng_state(state["torch_rng_state"])
+        if self.device.type == "cuda" and state.get("cuda_rng_state_all", None) is not None:
+            torch.cuda.set_rng_state_all(state["cuda_rng_state_all"])
+
+        q_sd = {k: v.to(self.device) for k, v in state["q_state"].items()}
+        qt_sd = {k: v.to(self.device) for k, v in state["q_tgt_state"].items()}
+        self.q.load_state_dict(q_sd)
+        self.q_tgt.load_state_dict(qt_sd)
+
+        self.optim.load_state_dict(state["optim_state"])
+        # asegurar estados del optimizador en el device correcto
+        for st in self.optim.state.values():
+            for k, v in st.items():
+                if torch.is_tensor(v):
+                    st[k] = v.to(self.device)
+                    
+        eb = state.get("eps_boost", {})
+        self._eps_boost_active = bool(eb.get("active", False))
+        self._eps_boost_start_step = int(eb.get("start", 0))
+        self._eps_boost_end_step = int(eb.get("end", 0))
+        self._eps_boost_value = float(eb.get("value", 0.0))
+
+        if "buffer_state" in state and hasattr(self.buffer, "set_state"):
+            self.buffer.set_state(state["buffer_state"])

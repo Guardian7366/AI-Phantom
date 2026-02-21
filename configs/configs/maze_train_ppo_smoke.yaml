@@ -1,0 +1,100 @@
+# configs/maze_train_ppo.yaml
+seed: 42
+env_seed: 42
+device: "auto"
+
+deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+
+snapshot_dir: "results/snapshots"
+
+env:
+  size: 8
+  wall_prob: 0.26
+  max_gen_tries: 200
+  max_steps: 128
+
+  # Rewards (mantengo tu intención, pero con balance más estable para PPO)
+  step_penalty: -0.01
+  invalid_move_penalty: -0.02
+  goal_reward: 1.0
+
+  # PPO suele entrenar mejor si el shaping no “domina” al goal:
+  progress_reward: 0.025
+
+  # anti-loop: útil, pero no tan agresivo para PPO
+  revisit_penalty: 0.0015
+  new_cell_bonus: 0.0005
+
+  min_bfs_start_goal_lvl1: 2
+  # un pelín más estricto para que lvl2 no sea trivial
+  min_bfs_start_goal_lvl2: 5
+
+  # Pool lvl2: más diversidad controlada
+  lvl2_grid_pool_size: 128
+  lvl2_pool_refresh_prob: 0.05
+
+# Wrapper estocástico opcional (déjalo apagado por ahora; se usa después para robustez)
+stoch:
+  enabled: false
+  # action_slip_prob: 0.05
+  # reseed_on_env_reset: true
+
+agent:
+  num_actions: 4
+  seed: 42
+
+  gamma: 0.99
+  gae_lambda: 0.95
+
+  clip_eps: 0.20
+  entropy_coef: 0.01
+  value_coef: 0.50
+
+  # ✅ Estabilidad PPO (NUEVO - requiere PPOConfig actualizado)
+  target_kl: 0.02
+  target_kl_multiplier: 1.5
+
+  clip_value_loss: true
+  value_clip_eps: 0.2
+
+  lr: 0.00025
+  weight_decay: 0.0
+  max_grad_norm: 0.5
+  use_amp: true
+
+  ppo_epochs: 4
+  minibatch_size: 256
+
+train:
+  run_name: "maze_ppo_lvl2_gold"
+  results_dir: "results/runs"
+  checkpoint_dir: "results/checkpoints"
+  seed: 42
+
+  # Entrenamiento
+  num_updates: 30
+  rollout_steps: 2048
+  max_steps_per_episode: 128
+
+  # Evaluación (buen balance)
+  eval_every_updates: 10
+  eval_episodes_quick: 40
+  eval_episodes: 400
+  eval_full_every_evals: 9999
+
+  # Curriculum (más estable que 0.2 step)
+  success_window: 300
+  min_samples_to_advance: 300
+  advance_threshold: 0.985
+  curriculum_max_level: 2
+
+  mix_next_prob_step: 0.10
+  mix_next_prob_cap: 0.60
+
+  # interleave lower en lvl2 para no olvidar y mejorar generalización
+  interleave_lower_prob: 0.22
+  interleave_lower_min_level: 1
+
+  save_last_every_updates: 20
