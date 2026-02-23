@@ -1,207 +1,225 @@
 # scripts/train_ppo.py
 from __future__ import annotations
 
-import argparse
 import os
-import json
-from typing import Dict, Any
+from dataclasses import dataclass
 
 import torch
-import yaml
 
-from utils.logging import timestamp
-from utils.seeding import seed_everything
-from environments.maze.maze_env import MazeEnvironment, MazeConfig
-
-from agents.ppo.ppo_agent import PPOAgent, PPOConfig
-from training.trainers.ppo_trainer import PPOTrainer, PPOTrainConfig
+from ai_phantom.core import select_device, set_global_seed, save_checkpoint, safe_torch_compile
+from ai_phantom.envs.maze import MazeConfig, MazeEnv
+from ai_phantom.agents.ppo import CnnActorCritic, PPOConfig, PPOTrainer, Policy
+from ai_phantom.agents.ppo.buffer import RolloutBuffer
+from ai_phantom.controllers import EvalController, EvalConfig
 
 
-# Wrapper opcional (no rompe si no lo usas)
-try:
-    from environments.maze.stochastic_wrapper import StochasticWrapper, StochasticConfig
-except Exception:
-    StochasticWrapper = None
-    StochasticConfig = None
+@dataclass
+class StopConfig:
+    target_det_sr: float = 1.0
+    consecutive_evals: int = 3
+    min_updates_before_stop: int = 50
 
 
-def _load_yaml(path: str) -> Dict[str, Any]:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"No existe el config YAML: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise ValueError("El YAML debe ser un diccionario en la raíz.")
-    return data
+def main() -> None:
+    set_global_seed(123)
 
-
-def _strict_kwargs(dataclass_type, section: Dict[str, Any], section_name: str) -> Dict[str, Any]:
-    allowed = set(getattr(dataclass_type, "__dataclass_fields__", {}).keys())
-    if not allowed:
-        raise ValueError(f"{dataclass_type} no parece ser dataclass.")
-    unknown = set(section.keys()) - allowed
-    if unknown:
-        raise KeyError(
-            f"Claves desconocidas en '{section_name}': {sorted(list(unknown))}. "
-            f"Permitidas: {sorted(list(allowed))}"
-        )
-    return dict(section)
-
-
-def _device_from_string(device_str: str) -> torch.device:
-    device_str = (device_str or "auto").lower()
-    if device_str == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if device_str in ("cuda", "cpu"):
-        return torch.device(device_str)
-    raise ValueError("device debe ser: 'auto', 'cuda' o 'cpu'.")
-
-
-def _ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-
-
-def _save_run_snapshot(folder: str, *, yaml_path: str, cfg: Dict[str, Any], extra: Dict[str, Any]) -> None:
-    _ensure_dir(folder)
-
-    resolved_path = os.path.join(folder, "resolved_config.yaml")
-    with open(resolved_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
-
-    meta_path = os.path.join(folder, "run_meta.json")
-    payload = {"yaml_path": str(yaml_path), **extra}
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
-
-def _apply_torch_determinism(cfg: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-    det = bool(cfg.get("deterministic", False))
-    bench = bool(cfg.get("cudnn_benchmark", not det))
-
-    torch.backends.cudnn.benchmark = bool(bench)
-    torch.backends.cudnn.deterministic = bool(det)
-
-    allow_tf32 = bool(cfg.get("allow_tf32", True)) and (device.type == "cuda") and (not det)
-    try:
-        torch.backends.cuda.matmul.allow_tf32 = bool(allow_tf32)
-        torch.backends.cudnn.allow_tf32 = bool(allow_tf32)
-    except Exception:
-        pass
-
-    if det:
-        try:
-            torch.use_deterministic_algorithms(True)
-        except Exception:
-            pass
-
-    return {
-        "deterministic": bool(det),
-        "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
-        "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
-        "allow_tf32": bool(allow_tf32),
-    }
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, default="configs/maze_train_ppo.yaml")
-    args = ap.parse_args()
-
-    cfg = _load_yaml(args.config)
-
-    device = _device_from_string(cfg.get("device", "auto"))
+    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
+    device = dev_cfg.device
     print("Device:", device)
 
-    # Seeds
-    base_seed = int(cfg.get("seed", 42))
-    seed_everything(base_seed)
-    print("Train seed:", base_seed)
+    # ✅ C3: novelty OFF + shaping clamp
+    env_cfg = MazeConfig(
+        height=12,
+        width=12,
+        use_walls=False,
+        max_steps=128,  # ✅ Sprint 1-A: alinear con rollout_len
+        min_manhattan=6,
+        step_penalty=-0.01,
+        wall_bump_penalty=-0.02,
+        goal_reward=1.0,
+        progress_reward=0.03,
+        revisit_penalty=0.002,
+        include_visited=True,
+        include_step_channel=True,
+        include_goal=True,
+        novelty_beta=0.0,           # ✅ C3
+        progress_reward_clip=0.05,  # ✅ C3
+        include_dist_channel=True,
+        dist_invert=True, 
+        dist_clip=64,
+        enable_loop_detection=False,
+        terminate_on_loop=False,
+    )
 
-    torch_flags = _apply_torch_determinism(cfg, device)
+    ppo_cfg = PPOConfig(
+        rollout_len=128,
+        lr=1.0e-4,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        vf_coef=0.5,
+        ent_coef=0.001,
+        max_grad_norm=0.5,
+        ppo_epochs=4,
+        minibatch_size=64,
+        target_kl=0.01,
+        enable_action_mask=True,
+        abort_on_nan=True,
+        nan_logits_replacement=0.0,
+        lr_max = 1.5e-4,
+        clip_max = 0.22,
+        lr_up_factor = 1.02,
+        clip_up_factor = 1.01,          
+    )
 
-    # ENV
-    env_section = cfg.get("env", {}) or {}
-    if not isinstance(env_section, dict):
-        raise ValueError("La sección 'env' debe ser un diccionario.")
-    env_kwargs = _strict_kwargs(MazeConfig, env_section, "env")
-    env_cfg = MazeConfig(**env_kwargs)
+      # ✅ Sprint 1-A: Alineación dura horizon
+    if int(env_cfg.max_steps) != int(ppo_cfg.rollout_len):
+        print(
+            f"⚠️ Horizon mismatch: env.max_steps={env_cfg.max_steps} vs rollout_len={ppo_cfg.rollout_len}. "
+            "Forzando env.max_steps = rollout_len para consistencia."
+        )
+        env_cfg.max_steps = int(ppo_cfg.rollout_len)
 
-    env_seed = int(cfg.get("env_seed", base_seed))
-    env = MazeEnvironment(env_cfg, rng_seed=env_seed)
+    env = MazeEnv(env_cfg, seed=0)
 
-    # STOCH wrapper opcional
-    stoch_section = cfg.get("stoch", None)
-    stoch_enabled = False
-    stoch_meta = None
+    obs0, _ = env.reset(seed=0, phase=0)
+    obs_shape = tuple(obs0.shape)
 
-    if stoch_section is not None:
-        if not isinstance(stoch_section, dict):
-            raise ValueError("La sección 'stoch' debe ser un diccionario si existe.")
-        stoch_enabled = bool(stoch_section.get("enabled", False))
-        if stoch_enabled:
-            if StochasticWrapper is None or StochasticConfig is None:
-                raise ImportError("stoch.enabled=true pero no se pudo importar StochasticWrapper/StochasticConfig.")
-            allowed_stoch_keys = set(getattr(StochasticConfig, "__dataclass_fields__", {}).keys()) | {"enabled", "seed"}
-            unknown = set(stoch_section.keys()) - allowed_stoch_keys
-            if unknown:
-                raise KeyError(f"Claves desconocidas en 'stoch': {sorted(list(unknown))}.")
+    model = CnnActorCritic(obs_shape=obs_shape, num_actions=4)
 
-            stoch_seed = int(stoch_section.get("seed", base_seed + 1_000_003))
-            stoch_cfg_kwargs = {
-                k: v for k, v in stoch_section.items()
-                if k in getattr(StochasticConfig, "__dataclass_fields__", {})
-            }
-            stoch_cfg = StochasticConfig(**stoch_cfg_kwargs)
+    
+    trainer = PPOTrainer(model=model, cfg=ppo_cfg, device=device)
 
-            stoch_meta = {"seed": int(stoch_seed), "config": dict(stoch_cfg_kwargs)}
-            env = StochasticWrapper(env, stoch_cfg, seed=stoch_seed)
-            print(f"StochasticWrapper: enabled (slip_prob={stoch_cfg.action_slip_prob}, seed={stoch_seed})")
+    dummy = torch.zeros((1, *obs_shape), device=device, dtype=torch.float32)
+    trainer.model = safe_torch_compile(trainer.model, device=device, example_input=dummy)
 
-    # AGENT (PPO)
-    agent_section = cfg.get("agent", {}) or {}
-    if not isinstance(agent_section, dict):
-        raise ValueError("La sección 'agent' debe ser un diccionario.")
-    agent_kwargs = _strict_kwargs(PPOConfig, agent_section, "agent")
-    if "seed" not in agent_kwargs:
-        agent_kwargs["seed"] = int(base_seed)
+    policy = Policy(model=trainer.model, enable_action_mask=True)
 
-    agent_cfg = PPOConfig(**agent_kwargs)
-    agent = PPOAgent(agent_cfg, device=device)
+    buffer = RolloutBuffer(
+        rollout_len=ppo_cfg.rollout_len,
+        obs_shape=obs_shape,
+        device=device,
+        pin_memory=(device.type == "cuda"),
+    )
 
-    # TRAIN CFG
-    train_section = cfg.get("train", {}) or {}
-    if not isinstance(train_section, dict):
-        raise ValueError("La sección 'train' debe ser un diccionario.")
+    evaluator = EvalController(env=env, policy=policy, device=device)
 
-    train_kwargs = _strict_kwargs(PPOTrainConfig, train_section, "train")
-    if "seed" not in train_kwargs:
-        train_kwargs["seed"] = int(base_seed)
+    os.makedirs("results/checkpoints", exist_ok=True)
+    best_sr = -1.0
+    best_path = "results/checkpoints/best_phase0.pt"
 
-    train_cfg = PPOTrainConfig(**train_kwargs)
+    total_updates = 300
+    phase = 0
+    train_seed_base = 42
 
-    trainer = PPOTrainer(env, agent, cfg=train_cfg, device=device)
+    eval_every = 25
+    eval_episodes = 200
 
-    # SNAPSHOT (Ley 4)
-    snapshot_root = str(cfg.get("snapshot_dir", train_cfg.checkpoint_dir))
-    snapshot_tag = f"{train_cfg.run_name}_seed{base_seed}_{timestamp()}"
-    snapshot_path = os.path.join(snapshot_root, snapshot_tag)
-    _ensure_dir(snapshot_path)
+    stop_cfg = StopConfig()
+    good_eval_streak = 0
 
-    extra_meta = {
-        "device": str(device),
-        "train_seed": int(base_seed),
-        "env_seed": int(env_seed),
-        "agent_seed": int(agent_cfg.seed),
-        "stoch_enabled": bool(stoch_enabled),
-        "stoch_meta": stoch_meta,
-        "torch_flags": dict(torch_flags),
-        "notes": "PPO run snapshot: resolved_config.yaml + run_meta.json",
-    }
-    _save_run_snapshot(snapshot_path, yaml_path=args.config, cfg=cfg, extra=extra_meta)
+    obs, info = env.reset(seed=train_seed_base, phase=phase)
+    episodes = 0
+    successes = 0
 
-    # TRAIN
-    result = trainer.train()
-    print("Done:", result)
+    for update_idx in range(1, int(total_updates) + 1):
+        buffer.reset()
+        rollout_last_done = False
+
+        for _t in range(int(ppo_cfg.rollout_len)):
+            obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
+            out = policy.act(obs_t, deterministic=False)
+
+            action = int(out.action.item())
+            logp = float(out.logp.item())
+            value = float(out.value.item())
+
+            next_obs, reward, done, info = env.step(action)
+
+            buffer.add(
+                obs=obs,
+                action=action,
+                reward=float(reward),
+                done=bool(done),
+                value=value,
+                logp=logp,
+            )
+
+            obs = next_obs
+            rollout_last_done = bool(done)
+
+            if done:
+                episodes += 1
+                if info.get("reached", False):
+                    successes += 1
+                obs, info = env.reset(seed=train_seed_base + episodes, phase=phase)
+
+        if rollout_last_done:
+            last_value = 0.0
+            last_done = True
+        else:
+            with torch.no_grad():
+                obs_last = torch.from_numpy(obs).unsqueeze(0).to(device).float()
+                last_value = float(policy.value(obs_last).item())
+            last_done = False
+
+        buffer.compute_returns_and_advantages(
+            last_value=last_value,
+            last_done=last_done,
+            gamma=ppo_cfg.gamma,
+            gae_lambda=ppo_cfg.gae_lambda,
+        )
+
+        metrics = trainer.update(buffer)
+
+        if metrics.get("nan_abort", 0.0) > 0.5:
+            for g in trainer.optim.param_groups:
+                g["lr"] = float(g["lr"]) * 0.5
+            print("⚠️ nan_abort detected -> lowering LR x0.5")
+
+        train_sr = (successes / episodes) if episodes > 0 else 0.0
+        print(
+            f"[UPD {update_idx:04d}] episodes={episodes:5d} trainSR={train_sr:.3f} "
+            f"pi={metrics['pi_loss']:.4f} vf={metrics['vf_loss']:.4f} ev={metrics['explained_var']:.3f} "
+            f"ent={metrics['entropy']:.4f} kl={metrics['approx_kl']:.5f} stop={int(metrics['early_stop'])} "
+            f"nan={int(metrics.get('nan_abort', 0.0) > 0.5)}"
+        )
+
+        if update_idx % int(eval_every) == 0:
+            ev_det = evaluator.evaluate(EvalConfig(episodes=int(eval_episodes), phase=phase, deterministic=True))
+            ev_sto = evaluator.evaluate(EvalConfig(episodes=int(eval_episodes), phase=phase, deterministic=False))
+            print(
+                f"   EVAL(det): SR={ev_det['sr']:.3f} avg_steps={ev_det['avg_steps']:.1f} | "
+                f"EVAL(sto): SR={ev_sto['sr']:.3f} avg_steps={ev_sto['avg_steps']:.1f}"
+            )
+
+            if float(ev_det["sr"]) > float(best_sr):
+                best_sr = float(ev_det["sr"])
+                save_checkpoint(
+                    best_path,
+                    model=trainer.model,
+                    optimizer=trainer.optim,
+                    extra={
+                        "phase": phase,
+                        "obs_shape": obs_shape,
+                        "best_eval_sr_det": best_sr,
+                        "ppo_cfg": ppo_cfg.__dict__,
+                        "env_cfg": env_cfg.__dict__,
+                    },
+                )
+                print(f"   ✅ Saved BEST checkpoint: {best_path} (SR={best_sr:.3f})")
+
+            if float(ev_det["sr"]) >= float(stop_cfg.target_det_sr) - 1e-12:
+                good_eval_streak += 1
+            else:
+                good_eval_streak = 0
+
+            if update_idx >= int(stop_cfg.min_updates_before_stop) and good_eval_streak >= int(stop_cfg.consecutive_evals):
+                print(
+                    f"   🏁 Early-stop: detSR={ev_det['sr']:.3f} "
+                    f"for {good_eval_streak} evals (updates >= {stop_cfg.min_updates_before_stop})."
+                )
+                break
 
 
 if __name__ == "__main__":

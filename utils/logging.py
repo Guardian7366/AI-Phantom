@@ -11,8 +11,8 @@ def ensure_dir(path: str) -> None:
 
 
 def timestamp() -> str:
-    # (si quieres aún menos colisiones, puedes añadir microsegundos)
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    # ✅ menos colisiones: incluye microsegundos
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
 
 def _json_default(o: Any):

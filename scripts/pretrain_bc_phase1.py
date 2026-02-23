@@ -1,0 +1,312 @@
+# scripts/pretrain_bc_phase1.py
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from ai_phantom.core import select_device, set_global_seed, save_checkpoint
+from ai_phantom.envs.maze import MazeConfig, MazeEnv
+from ai_phantom.agents.ppo import CnnActorCritic
+from ai_phantom.planners.bfs import bfs_plan, path_to_actions
+from ai_phantom.agents.ppo.action_mask import mask_invalid_actions  
+
+
+@dataclass
+class BCConfig:
+    # Repro
+    seed: int = 123
+
+    # Env / Dataset
+    phase: int = 1
+    train_seed_base: int = 42
+
+    # ✅ C4: paredes alineadas a train_phase1
+    use_walls: bool = True
+    walls_seed: int = 777
+    wall_prob: float = 0.18
+
+    # Dificultad (fase 1)
+    min_manhattan: int = 6
+
+    # Dataset streaming (controla tiempo)
+    episodes: int = 2500          # cuántos resets generamos por "epoch"
+    steps_per_ep: int = 48      
+    max_steps_env: int = 256      # max_steps del env (igual que training)
+
+    # Train
+    lr: float = 3e-4
+    batch_size: int = 256
+    grad_clip: float = 0.5
+
+    # “epochs” aquí = cuántas veces regeneramos datos nuevos (no reusar RAM)
+    epochs: int = 2
+
+    # Logging
+    log_every_steps: int = 200
+
+    rebuild_walls_each_episode: bool = True
+    walls_seed_base: int = 777
+    wall_prob: float = 0.18
+
+
+def _teacher_action(env: MazeEnv) -> int:
+    """
+    Teacher BFS: retorna la 1ra acción óptima desde el estado actual.
+    En fase=1 tu reset ya garantiza alcanzabilidad (dist_map[start] != -1).
+    """
+    path = bfs_plan(env.walls, env.agent, env.goal)
+    if path is None or len(path) < 2:
+        return 0
+    return int(path_to_actions(path)[0])
+
+
+@torch.no_grad()
+def _quick_eval_teacher_acc(
+    env: MazeEnv,
+    model: torch.nn.Module,
+    device: torch.device,
+    *,
+    phase: int,
+    seed_base: int,
+    episodes: int = 200,
+    steps_per_ep: int = 12,
+    rebuild_walls_each_episode: bool=False, 
+    walls_seed_base: int=777, 
+    wall_prob: float=0.18
+    ) -> float:
+    """
+    Eval rápida: compara acción del modelo vs acción BFS en estados muestreados.
+    OJO: esto NO es SR, solo “imitation accuracy”.
+    """
+    model.eval()
+    correct = 0
+    total = 0
+
+    for ep in range(int(episodes)):
+        if rebuild_walls_each_episode and hasattr(env, "rebuild_walls"):
+            env.rebuild_walls(seed=int(walls_seed_base + seed_base + ep), wall_prob=float(wall_prob))
+        obs, _ = env.reset(seed=int(seed_base + ep), phase=int(phase))
+        for _t in range(int(steps_per_ep)):
+            a_star = _teacher_action(env)
+
+            obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
+
+            logits, _v = model(obs_t)
+            logits = mask_invalid_actions(obs_t, logits, enable=True)
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+            all_neginf = torch.isneginf(logits).all(dim=-1)
+            if bool(all_neginf.any()):
+                logits = logits.clone()
+                logits[all_neginf] = 0.0
+
+            a_hat = int(torch.argmax(logits, dim=-1).item())
+
+            correct += 1 if (a_hat == a_star) else 0
+            total += 1
+
+            obs, _r, done, _info = env.step(a_star)
+            if done:
+                break
+
+    return (correct / total) if total > 0 else 0.0
+
+
+def main() -> None:
+    cfg = BCConfig()
+    set_global_seed(cfg.seed)
+
+    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
+    device = dev_cfg.device
+    print("Device:", device)
+
+    os.makedirs("results/checkpoints", exist_ok=True)
+
+    # ✅ Env alineado con train_phase1 (incluye paredes si aplica)
+    env_cfg = MazeConfig(
+        height=12,
+        width=12,
+
+        # debe empatar con train_phase1
+        use_walls=True,
+        wall_prob=0.18,
+
+        max_steps=int(cfg.max_steps_env),
+        min_manhattan=cfg.min_manhattan,
+
+        step_penalty=-0.01,
+        wall_bump_penalty=-0.02,
+        goal_reward=1.0,
+        progress_reward=0.03,
+        revisit_penalty=0.002,
+
+        # canales (forzados)
+        include_goal=True,
+        include_visited=True,
+        include_step_channel=True,
+
+        # C2 dist channel (forzado)
+        include_dist_channel=True,
+        dist_invert=True,
+        dist_clip=64,
+
+        novelty_beta=0.0,
+        progress_reward_clip=0.05,
+    )
+
+    # En BC queremos un laberinto fijo (como en training): seed fija las paredes
+    env = MazeEnv(env_cfg, seed=int(cfg.walls_seed))
+
+    # Modelo
+    obs0, _ = env.reset(seed=0, phase=int(cfg.phase))
+    print("BC obs_shape:", obs0.shape, "C=", obs0.shape[0])
+    obs_shape = tuple(obs0.shape)
+    model = CnnActorCritic(obs_shape=obs_shape, num_actions=4).to(device)
+    optim = torch.optim.Adam(model.parameters(), lr=float(cfg.lr), eps=1e-5)
+
+    print(
+        f"BC setup: use_walls={cfg.use_walls} wall_prob={cfg.wall_prob} walls_seed={cfg.walls_seed} "
+        f"episodes/epoch={cfg.episodes} steps/ep={cfg.steps_per_ep} epochs={cfg.epochs}"
+    )
+
+    model.train()
+
+    # Buffers batch (CPU) -> enviamos a GPU en cada update
+    obs_batch = []
+    act_batch = []
+
+    step_counter = 0
+    update_counter = 0
+
+    for epc in range(int(cfg.epochs)):
+        # regeneramos seeds para diversidad por “epoch”
+        base = int(cfg.train_seed_base + epc * 1_000_000)
+
+        running_loss = 0.0
+        running_n = 0
+
+        for ep in range(int(cfg.episodes)):
+            if cfg.rebuild_walls_each_episode and hasattr(env, "rebuild_walls"):
+                ws = int(cfg.walls_seed_base + base + ep)  # base ya cambia por epoch
+                env.rebuild_walls(seed=ws, wall_prob=float(cfg.wall_prob))
+
+            obs, _info = env.reset(seed=int(base + ep), phase=int(cfg.phase))
+
+            # Recolecta unos cuantos pasos del teacher (rápido y útil)
+            for _t in range(int(cfg.steps_per_ep)):
+                a = _teacher_action(env)
+
+                obs_batch.append(obs.copy())
+                act_batch.append(int(a))
+
+                obs, _r, done, _info = env.step(a)
+
+                step_counter += 1
+
+                # Train step cuando llenamos batch
+                if len(act_batch) >= int(cfg.batch_size):
+                    X = torch.from_numpy(np.stack(obs_batch, axis=0)).to(device).float()
+                    y = torch.tensor(act_batch, device=device, dtype=torch.long)
+
+                    logits, _v = model(X)
+
+                    # ✅ action masking igual que PPO
+                    logits = mask_invalid_actions(X, logits, enable=True)
+
+                    # ✅ sanitize igual que Policy/PPOTrainer (evita NaNs por filas all -inf)
+                    logits = torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+                    all_neginf = torch.isneginf(logits).all(dim=-1)
+                    if bool(all_neginf.any()):
+                        logits = logits.clone()
+                        logits[all_neginf] = 0.0
+
+                    loss = F.cross_entropy(logits, y)
+
+                    optim.zero_grad(set_to_none=True)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.grad_clip))
+                    optim.step()
+
+                    update_counter += 1
+                    running_loss += float(loss.item()) * len(act_batch)
+                    running_n += len(act_batch)
+
+                    obs_batch.clear()
+                    act_batch.clear()
+
+                    if (update_counter % max(1, int(cfg.log_every_steps))) == 0:
+                        avg_loss = running_loss / float(max(1, running_n))
+                        print(
+                            f"[BC epc {epc+1}/{cfg.epochs}] updates={update_counter:5d} "
+                            f"avg_loss={avg_loss:.4f} steps_seen={step_counter}"
+                        )
+
+                if done:
+                    break
+
+        # Al final de cada epoch, haz flush si quedó batch parcial
+        if len(act_batch) > 0:
+            X = torch.from_numpy(np.stack(obs_batch, axis=0)).to(device).float()
+            y = torch.tensor(act_batch, device=device, dtype=torch.long)
+
+            logits, _v = model(X)
+
+            # ✅ action masking igual que PPO
+            logits = mask_invalid_actions(X, logits, enable=True)
+
+            # ✅ sanitize igual que Policy/PPOTrainer (evita NaNs por filas all -inf)
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+            all_neginf = torch.isneginf(logits).all(dim=-1)
+            if bool(all_neginf.any()):
+                logits = logits.clone()
+                logits[all_neginf] = 0.0
+
+            loss = F.cross_entropy(logits, y)
+
+            optim.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.grad_clip))
+            optim.step()
+
+            update_counter += 1
+            running_loss += float(loss.item()) * len(act_batch)
+            running_n += len(act_batch)
+
+            obs_batch.clear()
+            act_batch.clear()
+
+        avg_loss = running_loss / float(max(1, running_n))
+        acc = _quick_eval_teacher_acc(
+            env=env,
+            model=model,
+            device=device,
+            phase=int(cfg.phase),
+            seed_base=99_000 + 10_000 * epc,
+            episodes=200,
+            steps_per_ep=12,
+        )
+        print(f"[BC epoch {epc+1}/{cfg.epochs}] done. avg_loss={avg_loss:.4f} teacher_acc={acc:.3f}")
+
+    out_path = "results/checkpoints/bc_phase1.pt"
+    save_checkpoint(
+        out_path,
+        model=model,
+        optimizer=optim,
+        extra={
+            "phase": int(cfg.phase),
+            "obs_shape": obs_shape,
+            "bc_cfg": cfg.__dict__,
+            "env_cfg": env_cfg.__dict__,
+            "walls_seed": int(cfg.walls_seed),
+        },
+        save_rng=True,
+    )
+    print(f"✅ Saved BC checkpoint: {out_path}")
+
+
+if __name__ == "__main__":
+    main()
