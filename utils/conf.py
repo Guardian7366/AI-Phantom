@@ -54,8 +54,14 @@ class Config:
         else:
             self.click_sound = None
 
-        music_path = os.path.join(SOUNDS_PATH, "MenuTheme.mp3")
-        if os.path.exists(music_path):
-            pygame.mixer.music.load(music_path)
+        menu_music_path = os.path.join(SOUNDS_PATH, "MenuTheme.mp3")
+        if os.path.exists(menu_music_path):
+            pygame.mixer.music.load(menu_music_path)
+            self.settings.apply_music_volume()
+            pygame.mixer.music.play(-1)
+        
+        maze_theme_path = os.path.join(SOUNDS_PATH, "MazeSoundtrack.mp3")
+        if os.path.exists(maze_theme_path):
+            pygame.mixer.music.load(maze_theme_path)
             self.settings.apply_music_volume()
             pygame.mixer.music.play(-1)

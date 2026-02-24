@@ -72,7 +72,7 @@ class MazeGameScreen:
         self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png")
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png")
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png")
-        self.goal_img = pygame.image.load("assets/sprites/misc/Player.png")
+        self.player_img = pygame.image.load("assets/sprites/misc/Player.png")
 
     # ----------------------
     # CREATION & LAYOUT
@@ -87,10 +87,10 @@ class MazeGameScreen:
     def _recalc_layout(self):
         width, height = self.screen.get_size()
 
-        margin = 40
+        margin = width / 6
         gap = 24
 
-        total_w = width - 2 * margin
+        total_w = width - 2
         maze_w = int(total_w * 0.68)
         stats_w = total_w - maze_w - gap
 
@@ -103,6 +103,14 @@ class MazeGameScreen:
 
         #Title center
         self.title_pos = (width // 2, 48)
+
+        #Ghost and score title
+        self.ghost_title_pos = (width // 4, 30)
+        self.ghost_score_pos = (width // 4, 65)
+
+        #Player and score title
+        self.player_title_pos = (width * 0.75, 30)
+        self.player_score_pos = (width * 0.75, 65)
 
         #Control positions
         ctl_y = area_top + 10
@@ -153,7 +161,7 @@ class MazeGameScreen:
                 if char == "#":
                     image = self.wall_img
                 elif char == "G":
-                    image = self.goal_img
+                    image = self.player_img
                 elif char == "A":
                     image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
                 else:
@@ -168,6 +176,24 @@ class MazeGameScreen:
         for b in (self.btn_back, self.btn_settings):
             b.update(mouse_pos)
             b.draw(self.screen)
+
+
+        ghost_title = self.font_button.render("GHOST", False, (230, 230, 230))
+        rectGT = ghost_title.get_rect(center=self.ghost_title_pos)
+        self.screen.blit(ghost_title, rectGT)
+
+        ghost_score = self.font_button.render("0", False, (230, 230, 230))
+        rectGS = ghost_score.get_rect(center=self.ghost_score_pos)
+        self.screen.blit(ghost_score, rectGS)
+
+        player_title = self.font_button.render("PLAYER", False, (230, 230, 230))
+        rectPT = player_title.get_rect(center=self.player_title_pos)
+        self.screen.blit(player_title, rectPT)
+
+        player_score = self.font_button.render("0", False, (230, 230, 230))
+        rectPS = player_score.get_rect(center=self.player_score_pos)
+        self.screen.blit(player_score, rectPS)
+
 
         #Synchronize labels
         #self.btn_play.text = "PAUSE" if self.playing else "PLAY"
@@ -195,6 +221,28 @@ class MazeGameScreen:
             return None
         """
         return None
+    
+    def move_ghost(self):
+        if self.maze_actions is None:
+            self.current_tick = pygame.time.get_ticks()
+            path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
+            if path is not None:
+                self.maze_actions = path_to_actions(path)
+            else:
+                self.maze_grid = None  # Trigger new maze generation if no path found
+        else:
+            # Step through actions at the current speed when playing
+            if pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
+                self.current_tick = pygame.time.get_ticks()
+                # Step the maze_env with the next action
+                self.current_action = self.maze_actions.pop(0)
+                # Update the maze environment and grid 
+                obs, reward, done, info = self.maze_env.step(self.current_action)
+                self.maze_grid = self.maze_env.render().splitlines()
+                if done:
+                    self.current_action = "idle"  # Reset action to idle when episode ends
+                    self.maze_actions = None  # Reset for next episode
+                    self.maze_grid = None  # Trigger new maze generation
 
     # ----------------------------------
     # MAIN LOOP
@@ -207,33 +255,35 @@ class MazeGameScreen:
 
             if self.maze_grid is None:
                 obs, info = self.maze_env.reset(seed=0, phase=0)
+                self.maze_env.goal = None  # Clear goal to allow player placement
                 self.maze_grid = self.maze_env.render().splitlines()
 
-            if self.maze_actions is None:
-                self.current_tick = pygame.time.get_ticks()
-                path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
-                if path is not None:
-                    self.maze_actions = path_to_actions(path)
-                else:
-                    self.maze_grid = None  # Trigger new maze generation if no path found
-            else:
-                # Step through actions at the current speed when playing
-                if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
-                    self.current_tick = pygame.time.get_ticks()
-                    # Step the maze_env with the next action
-                    self.current_action = self.maze_actions.pop(0)
-                    # Update the maze environment and grid 
-                    obs, reward, done, info = self.maze_env.step(self.current_action)
-                    self.maze_grid = self.maze_env.render().splitlines()
-                    if done:
-                        self.current_action = "idle"  # Reset action to idle when episode ends
-                        self.maze_actions = None  # Reset for next episode
-                        self.maze_grid = None  # Trigger new maze generation
+            if self.maze_env.goal is not None:
+                self.move_ghost()  # Start the ghost movement logic
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     return None
+
+                if self.maze_env.goal is None:
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        # User puts player with click
+                        mouse_pos = pygame.mouse.get_pos()
+                        # Check that mouse is inside maze area
+                        if self.maze_rect.collidepoint(mouse_pos):
+                            # Get grid cell from mouse position
+                            rel_x = mouse_pos[0] - self.maze_rect.left
+                            rel_y = mouse_pos[1] - self.maze_rect.top
+                            cell_w = self.maze_rect.width / self.maze_cfg.width
+                            cell_h = self.maze_rect.height / self.maze_cfg.height
+                            cell_c = int(rel_x // cell_w)
+                            cell_r = int(rel_y // cell_h)
+                            # Check that cell is not a wall or ghost
+                            if self.maze_grid[cell_r][cell_c] not in ("#", "A"):
+                                # Set goal to player position
+                                self.maze_env.goal = (cell_r, cell_c)
+                                self.maze_grid = self.maze_env.render().splitlines()
 
                 if self.show_settings:
                     if event.type == pygame.MOUSEBUTTONDOWN:
@@ -255,11 +305,6 @@ class MazeGameScreen:
                         if self.maze_rect.collidepoint(event.pos) or self.stats_rect.collidepoint(event.pos):
                             if self.click_sound:
                                 self.click_sound.play()
-
-            #Update training logic when playing (placeholder)
-            if self.playing:
-                # here goes stepping training/generator logic, respecting self.speeds[self.speed_index]
-                pass
 
             #Draw screen elements
             self.screen.fill((10, 12, 18))

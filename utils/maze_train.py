@@ -286,11 +286,6 @@ class MazeTrainingScreen:
                             if self.click_sound:
                                 self.click_sound.play()
 
-            #Update training logic when playing (placeholder)
-            if self.playing:
-                # here goes stepping training/generator logic, respecting self.speeds[self.speed_index]
-                pass
-
             #Draw screen elements
             self.screen.fill((10, 12, 18))
             self._draw_title()
