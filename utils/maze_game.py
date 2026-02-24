@@ -65,14 +65,15 @@ class MazeGameScreen:
 
         # Set images according to ACTIONS in maze env
         self.ghost_img = {}
-        self.ghost_img[0] = pygame.image.load("assets/sprites/phantom/PhantomBack.png")
-        self.ghost_img[1] = pygame.image.load("assets/sprites/phantom/PhantomFront.png")
-        self.ghost_img[2] = pygame.image.load("assets/sprites/phantom/PhantomLeft.png")
-        self.ghost_img[3] = pygame.image.load("assets/sprites/phantom/PhantomRight.png")
-        self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png")
-        self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png")
-        self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png")
-        self.player_img = pygame.image.load("assets/sprites/misc/Player.png")
+        self.ghost_img[0] = pygame.image.load("assets/sprites/phantom/PhantomBack.png").convert_alpha()
+        self.ghost_img[1] = pygame.image.load("assets/sprites/phantom/PhantomFront.png").convert_alpha()
+        self.ghost_img[2] = pygame.image.load("assets/sprites/phantom/PhantomLeft.png").convert_alpha()
+        self.ghost_img[3] = pygame.image.load("assets/sprites/phantom/PhantomRight.png").convert_alpha()
+        self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png").convert_alpha()
+
+        self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png").convert()
+        self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
+        self.player_img = pygame.image.load("assets/sprites/misc/Player.png").convert_alpha()
 
     # ----------------------
     # CREATION & LAYOUT
@@ -141,34 +142,68 @@ class MazeGameScreen:
     def _draw_maze_area(self):
         if self.maze_grid is None:
             return
+
         pygame.draw.rect(self.screen, (12, 14, 22), self.maze_rect)
         pygame.draw.rect(self.screen, (90, 90, 90), self.maze_rect, 3)
         pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
 
-        #Grid using cfg dimensions
+        # Dimensiones del grid
         cols = self.maze_cfg.width
         rows = self.maze_cfg.height
         cell_w = self.maze_rect.width / cols
         cell_h = self.maze_rect.height / rows
 
+        ghost_row = None
+        ghost_col = None
+
+        # ===== 1. DIBUJAR MAPA (SIN FANTASMA) =====
         for r in range(rows):
             for c in range(cols):
                 x = int(self.maze_rect.left + c * cell_w)
                 y = int(self.maze_rect.top + r * cell_h)
                 rect = pygame.Rect(x, y, math.ceil(cell_w), math.ceil(cell_h))
-                image = None
+
                 char = self.maze_grid[r][c]
-                if char == "#":
+
+                if char == "A":
+                    # Guardamos posición del fantasma pero NO lo dibujamos aquí
+                    ghost_row = r
+                    ghost_col = c
+                    image = self.floor_img  # piso debajo del fantasma
+                elif char == "#":
                     image = self.wall_img
                 elif char == "G":
-                    image = self.player_img
-                elif char == "A":
-                    image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
+                    # Dibujar piso primero
+                    floor_scaled = pygame.transform.scale(self.floor_img, (rect.width, rect.height))
+                    self.screen.blit(floor_scaled, rect)
+
+                    # Luego dibujar el goal encima (con transparencia)
+                    goal_scaled = pygame.transform.scale(self.goal_img, (rect.width, rect.height))
+                    self.screen.blit(goal_scaled, rect)
+                    continue
                 else:
                     image = self.floor_img
-                image = pygame.transform.scale(image, (rect.width, rect.height))
-                self.screen.blit(image, rect)
-    
+
+                scaled = pygame.transform.scale(image, (rect.width, rect.height))
+                self.screen.blit(scaled, rect)
+
+        # ===== 2. DIBUJAR FANTASMA ENCIMA (CAPA SUPERIOR) =====
+        if ghost_row is not None and ghost_col is not None:
+            ghost_img = self.ghost_img.get(
+                self.current_action,
+                self.ghost_img["idle"]
+            )
+
+            ghost_w = math.ceil(cell_w)
+            ghost_h = math.ceil(cell_h)
+
+            # smoothscale = mejor calidad y menos halo
+            ghost_scaled = pygame.transform.smoothscale(ghost_img, (ghost_w, ghost_h))
+
+            ghost_x = int(self.maze_rect.left + ghost_col * cell_w)
+            ghost_y = int(self.maze_rect.top + ghost_row * cell_h)
+
+            self.screen.blit(ghost_scaled, (ghost_x, ghost_y))
 
     def _draw_controls(self):
         mouse_pos = pygame.mouse.get_pos()

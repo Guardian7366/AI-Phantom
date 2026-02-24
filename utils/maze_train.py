@@ -65,14 +65,14 @@ class MazeTrainingScreen:
 
         # Set images according to ACTIONS in maze env
         self.ghost_img = {}
-        self.ghost_img[0] = pygame.image.load("assets/sprites/phantom/PhantomBack.png")
-        self.ghost_img[1] = pygame.image.load("assets/sprites/phantom/PhantomFront.png")
-        self.ghost_img[2] = pygame.image.load("assets/sprites/phantom/PhantomLeft.png")
-        self.ghost_img[3] = pygame.image.load("assets/sprites/phantom/PhantomRight.png")
-        self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png")
-        self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png")
-        self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png")
-        self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png")
+        self.ghost_img[0] = pygame.image.load("assets/sprites/phantom/PhantomBack.png").convert_alpha()
+        self.ghost_img[1] = pygame.image.load("assets/sprites/phantom/PhantomFront.png").convert_alpha()
+        self.ghost_img[2] = pygame.image.load("assets/sprites/phantom/PhantomLeft.png").convert_alpha()
+        self.ghost_img[3] = pygame.image.load("assets/sprites/phantom/PhantomRight.png").convert_alpha()
+        self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png").convert_alpha()
+        self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png").convert()
+        self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
+        self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png").convert()
 
     # ----------------------
     # CREATION & LAYOUT
@@ -137,33 +137,58 @@ class MazeTrainingScreen:
     def _draw_maze_area(self):
         if self.maze_grid is None:
             return
+
         pygame.draw.rect(self.screen, (12, 14, 22), self.maze_rect)
         pygame.draw.rect(self.screen, (90, 90, 90), self.maze_rect, 3)
         pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
 
-        #Grid placeholder using cfg dimensions
         cols = self.maze_cfg.width
         rows = self.maze_cfg.height
         cell_w = self.maze_rect.width / cols
         cell_h = self.maze_rect.height / rows
 
+        ghost_row = None
+        ghost_col = None
+
+        # ===== DIBUJAR LABERINTO (SIN FANTASMA) =====
         for r in range(rows):
             for c in range(cols):
                 x = int(self.maze_rect.left + c * cell_w)
                 y = int(self.maze_rect.top + r * cell_h)
                 rect = pygame.Rect(x, y, math.ceil(cell_w), math.ceil(cell_h))
-                image = None
+
                 char = self.maze_grid[r][c]
-                if char == "#":
+
+                if char == "A":
+                    ghost_row = r
+                    ghost_col = c
+                    image = self.floor_img  # piso debajo del fantasma
+                elif char == "#":
                     image = self.wall_img
                 elif char == "G":
                     image = self.goal_img
-                elif char == "A":
-                    image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
                 else:
                     image = self.floor_img
-                image = pygame.transform.scale(image, (rect.width, rect.height))
-                self.screen.blit(image, rect)
+
+                scaled = pygame.transform.scale(image, (rect.width, rect.height))
+                self.screen.blit(scaled, rect)
+
+        # ===== DIBUJAR FANTASMA ENCIMA =====
+        if ghost_row is not None and ghost_col is not None:
+            ghost_img = self.ghost_img.get(
+                self.current_action,
+                self.ghost_img["idle"]
+            )
+
+            ghost_w = math.ceil(cell_w)
+            ghost_h = math.ceil(cell_h)
+
+            ghost_scaled = pygame.transform.scale(ghost_img, (ghost_w, ghost_h))
+
+            ghost_x = int(self.maze_rect.left + ghost_col * cell_w)
+            ghost_y = int(self.maze_rect.top + ghost_row * cell_h)
+
+            self.screen.blit(ghost_scaled, (ghost_x, ghost_y))
 
     def _draw_stats_area(self):
         pygame.draw.rect(self.screen, (16, 18, 26), self.stats_rect)
