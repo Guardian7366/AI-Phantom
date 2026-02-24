@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
+from ai_phantom.core.horizon import sync_horizon
 
 import numpy as np
 import torch
@@ -51,14 +52,8 @@ class TrainController:
         self.cfg = cfg
         self.ppo_cfg = ppo_cfg
         self.device = device
-
-        if int(self.env.cfg.max_steps) != int(self.ppo_cfg.rollout_len):
-            print(
-                f"⚠️ Horizon mismatch (TrainController): env.max_steps={self.env.cfg.max_steps} "
-                f"vs rollout_len={self.ppo_cfg.rollout_len}. Forzando env.max_steps = rollout_len."
-            )
-            self.env.cfg.max_steps = int(self.ppo_cfg.rollout_len)
-
+        
+        sync_horizon([self.env], self.ppo_cfg.rollout_len, name="TrainController")
         self.obs: np.ndarray
         self.info: Dict[str, Any] = {}
 

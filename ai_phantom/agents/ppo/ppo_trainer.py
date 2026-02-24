@@ -1,5 +1,7 @@
 # ai_phantom/agents/ppo/ppo_trainer.py
 from __future__ import annotations
+from .logits_utils import sanitize_logits_keep_neginf
+
 
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -31,6 +33,7 @@ class PPOConfig:
     # KL target
     target_kl: float = 0.03
     vf_clip_range: float = 0.2
+    early_stop_kl_mult: float = 1.5  # default como ya estaba
 
     enable_action_mask: bool = True
 
@@ -65,6 +68,8 @@ class PPOConfig:
     ratio_clip_max: float = 5.0           # evita explosiones si logp se va
     ratio_nan_replacement: float = 1.0    # neutral
 
+    adv_clip: float = 10.0   # 0 o negativo para desactivar
+    
     # Aux imitation (solo teacher steps)
     bc_coef: float = 0.02
     bc_coef_end: float = 0.0
@@ -93,29 +98,11 @@ class PPOTrainer:
     @staticmethod
     def _explained_variance(y_pred: torch.Tensor, y_true: torch.Tensor) -> float:
         # y_true puede ser casi constante en entornos sencillos; maneja var ~ 0
-        var_y = torch.var(y_true)
+        var_y = torch.var(y_true, unbiased=False)
         if var_y.item() < 1e-12:
             return 0.0
-        ev = 1.0 - torch.var(y_true - y_pred) / (var_y + 1e-8)
+        ev = 1.0 - torch.var(y_true - y_pred, unbiased=False) / (var_y + 1e-8)
         return float(ev.clamp(-1.0, 1.0).item())
-
-    def _sanitize_logits(self, logits: torch.Tensor) -> torch.Tensor:
-        """
-        Mantiene -inf (del masking). Solo corrige NaN/+inf.
-        Si una fila queda completamente inválida (todo -inf), la rescata con ceros.
-        """
-        logits = torch.nan_to_num(
-            logits,
-            nan=float(self.cfg.nan_logits_replacement),
-            posinf=float(self.cfg.nan_logits_replacement),
-            neginf=float("-inf"),
-        )
-
-        all_neginf = torch.isneginf(logits).all(dim=-1)
-        if bool(all_neginf.any()):
-            logits = logits.clone()
-            logits[all_neginf] = 0.0
-        return logits
 
     def _get_lr(self) -> float:
         return float(self.optim.param_groups[0]["lr"])
@@ -188,6 +175,7 @@ class PPOTrainer:
         kl_signed_acc = 0.0
         ev_acc = 0.0
         n_batches = 0
+        ratio_sat_acc = 0.0
 
         self.model.train()
 
@@ -203,7 +191,7 @@ class PPOTrainer:
 
                 # Action masking + saneamiento
                 logits = mask_invalid_actions(batch.obs, logits, enable=bool(self.cfg.enable_action_mask))
-                logits = self._sanitize_logits(logits)
+                logits = sanitize_logits_keep_neginf(logits, nan_repl=float(self.cfg.nan_logits_replacement))
 
                 # value: asegúrate de shape [B]
                 if value.dim() == 2 and value.size(-1) == 1:
@@ -239,8 +227,21 @@ class PPOTrainer:
                     neginf=float(self.cfg.ratio_nan_replacement),
                 ).clamp(0.0, float(self.cfg.ratio_clip_max))
 
-                surr1 = ratio * batch.advantages
-                surr2 = torch.clamp(ratio, 1.0 - clip, 1.0 + clip) * batch.advantages
+                # ✅ Métrica: porcentaje de ratio saturado
+                with torch.no_grad():
+                    ratio_sat = (
+                        (ratio >= float(self.cfg.ratio_clip_max) - 1e-12)
+                        .float()
+                        .mean()
+                    )
+
+                # ✅ Advantage clipping (protección de estabilidad)
+                adv = batch.advantages
+                if float(self.cfg.adv_clip) > 0.0:
+                    adv = adv.clamp(-float(self.cfg.adv_clip), float(self.cfg.adv_clip))
+
+                surr1 = ratio * adv
+                surr2 = torch.clamp(ratio, 1.0 - clip, 1.0 + clip) * adv
                 pi_loss = -torch.min(surr1, surr2).mean()
 
                 # ✅ Value function clipping (PPO2 style)
@@ -275,12 +276,19 @@ class PPOTrainer:
                             + t * float(self.cfg.bc_coef_end)
                         )
 
-                        bc_loss = F.cross_entropy(
-                            logits[mask],
-                            batch.actions[mask],
-                        )
+                        # --- BC loss robusto: solo filas donde la acción target NO está en -inf ---
+                        logits_t = logits[mask]
+                        acts_t = batch.actions[mask]
 
-                        loss = loss + float(bc_coef) * bc_loss
+                        # chequea si el logit de la acción target es finito
+                        target_logits = logits_t.gather(1, acts_t.view(-1, 1)).squeeze(1)
+                        good_t = torch.isfinite(target_logits)
+
+                        if bool(good_t.any()):
+                            bc_loss = F.cross_entropy(logits_t[good_t], acts_t[good_t])
+                            loss = loss + float(bc_coef) * bc_loss
+                        else:
+                            bc_loss = torch.tensor(0.0, device=self.device)
 
                 if bool(self.cfg.abort_on_nan) and (not torch.isfinite(loss).all()):
                     nan_abort = True
@@ -307,12 +315,15 @@ class PPOTrainer:
                 kl_signed_acc += float(approx_kl_signed.item())
                 ev_acc += float(ev)
                 n_batches += 1
+                ratio_sat_acc += float(ratio_sat.item())
 
                 last_kl_ema = self._update_kl_ema(float(approx_kl_mag.item()))
                 self._adaptive_step(last_kl_ema)
 
                 # ✅ Early-stop por |KL| (EMA)
-                if target_kl > 0.0 and float(last_kl_ema) > (target_kl * 1.5):
+                if target_kl > 0.0 and float(last_kl_ema) > (
+                    target_kl * float(self.cfg.early_stop_kl_mult)
+                ):
                     early_stop = True
                     break
 
@@ -347,4 +358,5 @@ class PPOTrainer:
             "clip": float(self.cfg.clip_range),
             "kl_ema": float(last_kl_ema),
             "bc_loss": bc_loss_acc / n_batches,
+            "ratio_sat": ratio_sat_acc / n_batches,
         }

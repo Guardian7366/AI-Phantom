@@ -1,6 +1,6 @@
 # ai_phantom/agents/ppo/policy.py
 from __future__ import annotations
-
+from .logits_utils import sanitize_logits_keep_neginf
 from dataclasses import dataclass
 from typing import Optional
 
@@ -43,24 +43,6 @@ class Policy:
         self._gen = torch.Generator(device="cpu")
         self._gen.manual_seed(seed)
 
-    @staticmethod
-    def _sanitize_logits_like_trainer(logits: torch.Tensor, nan_repl: float = 0.0) -> torch.Tensor:
-        """
-        Mantiene -inf (del masking). Solo corrige NaN/+inf.
-        Si una fila queda completamente inválida (todo -inf), la rescata con ceros.
-        """
-        logits = torch.nan_to_num(
-            logits,
-            nan=float(nan_repl),
-            posinf=float(nan_repl),
-            neginf=float("-inf"),
-        )
-        all_neginf = torch.isneginf(logits).all(dim=-1)
-        if bool(all_neginf.any()):
-            logits = logits.clone()
-            logits[all_neginf] = 0.0
-        return logits
-
     @torch.no_grad()
     def act(self, obs: torch.Tensor, deterministic: bool) -> ActOutput:
         self.model.eval()
@@ -73,7 +55,7 @@ class Policy:
         logits = mask_invalid_actions(obs, logits, enable=self.enable_action_mask)
 
         # ✅ Protección numérica igual que trainer
-        logits = self._sanitize_logits_like_trainer(logits, nan_repl=0.0)
+        logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
 
         logp_all = F.log_softmax(logits, dim=-1)
         probs = logp_all.exp()

@@ -1,6 +1,6 @@
 # scripts/pretrain_bc_phase1.py
 from __future__ import annotations
-
+from ai_phantom.agents.ppo.logits_utils import sanitize_logits_keep_neginf
 import os
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -98,7 +98,7 @@ def _quick_eval_teacher_acc(
 
             logits, _v = model(obs_t)
             logits = mask_invalid_actions(obs_t, logits, enable=True)
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+            logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
             all_neginf = torch.isneginf(logits).all(dim=-1)
             if bool(all_neginf.any()):
                 logits = logits.clone()
@@ -218,7 +218,7 @@ def main() -> None:
                     logits = mask_invalid_actions(X, logits, enable=True)
 
                     # ✅ sanitize igual que Policy/PPOTrainer (evita NaNs por filas all -inf)
-                    logits = torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+                    logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
                     all_neginf = torch.isneginf(logits).all(dim=-1)
                     if bool(all_neginf.any()):
                         logits = logits.clone()
@@ -259,7 +259,7 @@ def main() -> None:
             logits = mask_invalid_actions(X, logits, enable=True)
 
             # ✅ sanitize igual que Policy/PPOTrainer (evita NaNs por filas all -inf)
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+            logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
             all_neginf = torch.isneginf(logits).all(dim=-1)
             if bool(all_neginf.any()):
                 logits = logits.clone()
@@ -288,6 +288,9 @@ def main() -> None:
             seed_base=99_000 + 10_000 * epc,
             episodes=200,
             steps_per_ep=12,
+            rebuild_walls_each_episode=bool(cfg.rebuild_walls_each_episode),
+            walls_seed_base=int(cfg.walls_seed_base),
+            wall_prob=float(cfg.wall_prob),
         )
         print(f"[BC epoch {epc+1}/{cfg.epochs}] done. avg_loss={avg_loss:.4f} teacher_acc={acc:.3f}")
 

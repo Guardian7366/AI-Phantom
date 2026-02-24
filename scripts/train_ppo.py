@@ -1,5 +1,6 @@
 # scripts/train_ppo.py
 from __future__ import annotations
+from ai_phantom.core.horizon import sync_horizon
 
 import os
 from dataclasses import dataclass
@@ -45,6 +46,12 @@ def main() -> None:
         novelty_beta=0.0,           # ✅ C3
         progress_reward_clip=0.05,  # ✅ C3
         include_dist_channel=True,
+        # ✅ Potential-based shaping (alineado con PPO gamma)
+        use_potential_shaping=True,
+        potential_gamma=0.99,      # igual a ppo_cfg.gamma
+        potential_coef=0.05,
+        potential_clip=0.10,
+        disable_legacy_progress_when_potential=True,
         dist_invert=True, 
         dist_clip=64,
         enable_loop_detection=False,
@@ -72,16 +79,11 @@ def main() -> None:
         clip_up_factor = 1.01,          
     )
 
-      # ✅ Sprint 1-A: Alineación dura horizon
-    if int(env_cfg.max_steps) != int(ppo_cfg.rollout_len):
-        print(
-            f"⚠️ Horizon mismatch: env.max_steps={env_cfg.max_steps} vs rollout_len={ppo_cfg.rollout_len}. "
-            "Forzando env.max_steps = rollout_len para consistencia."
-        )
-        env_cfg.max_steps = int(ppo_cfg.rollout_len)
-
+    # ✅ A2: alinear gamma de shaping potencial con PPO
+    env_cfg.potential_gamma = float(ppo_cfg.gamma)
+    
     env = MazeEnv(env_cfg, seed=0)
-
+    sync_horizon([env], ppo_cfg.rollout_len, name="Phase0")
     obs0, _ = env.reset(seed=0, phase=0)
     obs_shape = tuple(obs0.shape)
 
