@@ -9,7 +9,7 @@ from utils.start_menu import Button, Icon_Button, SettingsPanel
 from utils.conf import WINDOW_WIDTH, FPS, Config
 
 
-class MazeTrainingScreen:
+class MazeGameScreen:
     """
     Pantalla de entrenamiento del laberinto (UI).
     - Compatible con las fuentes y tamaños de StartScreen.
@@ -72,7 +72,7 @@ class MazeTrainingScreen:
         self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png")
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png")
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png")
-        self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png")
+        self.goal_img = pygame.image.load("assets/sprites/misc/Player.png")
 
     # ----------------------
     # CREATION & LAYOUT
@@ -82,8 +82,7 @@ class MazeTrainingScreen:
         self.btn_back = Button((20, 20, 140, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
         self.btn_settings = Icon_Button((WINDOW_WIDTH - 160, 20, 75, 75), "assets/images/gear.png", self.font_button, (40, 40, 60), (80, 80, 120), click_sound=self.click_sound)
         #Play bbutton
-        self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
-        self.btn_ff = Button((0, 0, 120, 44), "x1", self.font_button, (60, 60, 90), (100, 100, 140), click_sound=self.click_sound)
+        #self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
 
     def _recalc_layout(self):
         width, height = self.screen.get_size()
@@ -112,11 +111,8 @@ class MazeTrainingScreen:
 
         play_x = ff_x = self.stats_rect.left + 12
 
-        self.btn_play.rect.topleft = (play_x, ctl_y)
-        self.btn_play.rect.size = (play_w, play_h)
-
-        self.btn_ff.rect.topleft = (ff_x, ctl_y + play_h + 12)
-        self.btn_ff.rect.size = (ff_w, ff_h)
+        #self.btn_play.rect.topleft = (play_x, ctl_y)
+        #self.btn_play.rect.size = (play_w, play_h)
 
         self.btn_back.rect.topleft = (20, 30)
         self.btn_back.rect.size = (140, 50)
@@ -130,7 +126,7 @@ class MazeTrainingScreen:
     # DRAW SCREEN ELEMENTS
     # ----------------------------------
     def _draw_title(self):
-        title = self.font_title.render("TRAINING", False, (255, 255, 255))
+        title = self.font_title.render("MAZE", False, (255, 255, 255))
         rect = title.get_rect(center=self.title_pos)
         self.screen.blit(title, rect)
 
@@ -141,7 +137,7 @@ class MazeTrainingScreen:
         pygame.draw.rect(self.screen, (90, 90, 90), self.maze_rect, 3)
         pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
 
-        #Grid placeholder using cfg dimensions
+        #Grid using cfg dimensions
         cols = self.maze_cfg.width
         rows = self.maze_cfg.height
         cell_w = self.maze_rect.width / cols
@@ -164,38 +160,17 @@ class MazeTrainingScreen:
                     image = self.floor_img
                 image = pygame.transform.scale(image, (rect.width, rect.height))
                 self.screen.blit(image, rect)
-
-    def _draw_stats_area(self):
-        pygame.draw.rect(self.screen, (16, 18, 26), self.stats_rect)
-        pygame.draw.rect(self.screen, (120, 120, 120), self.stats_rect, 2)
-
-        hdr = self.font_text.render("Statistics", False, (230, 230, 230))
-        self.screen.blit(hdr, (self.stats_rect.left + 12, self.btn_ff.rect.bottom + 24))
-
-        y = self.btn_ff.rect.bottom + hdr.get_height() + 36
-        lines = [
-            f"Playing: {'Yes' if self.playing else 'No'}",
-            f"Speed: x{self.speeds[self.speed_index]}",
-            "Episodes: 0",
-            "Mean Reward: -",
-            "Best Success: -",
-            "",
-        ]
-        for ln in lines:
-            surf = self.font_text.render(ln, False, (200, 200, 200))
-            self.screen.blit(surf, (self.stats_rect.left + 12, y))
-            y += 30
+    
 
     def _draw_controls(self):
         mouse_pos = pygame.mouse.get_pos()
         #Update/draw top controls
-        for b in (self.btn_back, self.btn_settings, self.btn_play, self.btn_ff):
+        for b in (self.btn_back, self.btn_settings):
             b.update(mouse_pos)
             b.draw(self.screen)
 
         #Synchronize labels
-        self.btn_play.text = "PAUSE" if self.playing else "PLAY"
-        self.btn_ff.text = f"x{self.speeds[self.speed_index]}"
+        #self.btn_play.text = "PAUSE" if self.playing else "PLAY"
 
     # ----------------------------------
     # ELEMENT INTERACTION
@@ -213,17 +188,12 @@ class MazeTrainingScreen:
             #Display setting panel
             self.show_settings = True
             return None
-
+        """
         if self.btn_play.is_clicked(event):
             #Switch Play button mode
             self.playing = not self.playing
             return None
-
-        if self.btn_ff.is_clicked(event):
-            #Switch through simulation speeds
-            self.speed_index = (self.speed_index + 1) % len(self.speeds)
-            return None
-
+        """
         return None
 
     # ----------------------------------
@@ -295,7 +265,7 @@ class MazeTrainingScreen:
             self.screen.fill((10, 12, 18))
             self._draw_title()
             self._draw_maze_area()
-            self._draw_stats_area()
+            #self._draw_stats_area()
             self._draw_controls()
 
             if self.show_settings:

@@ -1,7 +1,7 @@
 import pygame
 import math
 import os
-from utils.visualization import Button
+from utils.start_menu import Button
 from utils.conf import FPS, Config
 
 
@@ -150,7 +150,7 @@ class SelectionMenuScreen:
 
         self.cards = []
 
-        titles = ["Maze", "Archery", "Coming Soon", "Coming Soon"]
+        titles = ["Maze", "Archery", "Maze Game", "Coming Soon"]
 
         for row in range(2):
             for col in range(2):
@@ -265,7 +265,10 @@ class SelectionMenuScreen:
                                 title = card["title"]
                                 if title == "Maze":
                                     return "maze_train"
+                                if title == "Maze Game":
+                                    return "maze_game"
                                 print(f"Selected: {card['title']}")
+
 
             self.screen.fill((18, 18, 28))
             self.draw_background()

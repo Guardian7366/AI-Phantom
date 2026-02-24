@@ -1,8 +1,9 @@
 import pygame
 #Screen classes obtained from their files to use functions and send parameters
-from utils.visualization import StartScreen
+from utils.start_menu import StartScreen
 from utils.selection_menu import SelectionMenuScreen
 from utils.maze_train import MazeTrainingScreen
+from utils.maze_game import MazeGameScreen
 from utils.conf import Config
 
 def main():
@@ -27,6 +28,8 @@ def main():
                 current_screen = SelectionMenuScreen(config)
             elif new_screen_name == "maze_train":
                 current_screen = MazeTrainingScreen(config)
+            elif new_screen_name == "maze_game":
+                current_screen = MazeGameScreen(config)
             else:
                 break
             current_screen_name = new_screen_name
