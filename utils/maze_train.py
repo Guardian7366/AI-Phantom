@@ -32,9 +32,23 @@ class MazeTrainingScreen:
         self.playing = False
         self.speed_index = 0
         self.speeds = [1, 2, 4]  # x1, x2, x4
+        self.sleeps = [1000, 500, 250]
+        self.current_tick = 0
 
         #Flags
         self.show_settings = False
+
+        self.maze_cfg = MazeConfig(
+            height=12,
+            width=12,
+            use_walls=False,
+            max_steps=256,
+            min_manhattan=6,
+        )
+        self.maze_env = MazeEnv(self.maze_cfg, seed=0)
+        self.maze_grid = None
+        self.maze_actions = None
+        self.current_action = "idle"
 
         #Create buttons
         self._create_buttons()
@@ -49,22 +63,13 @@ class MazeTrainingScreen:
         self._settings_arrow_rects = {}
         self.settings_panel = SettingsPanel(self.screen, self.settings, self.click_sound, self.font_button)
 
+        # Set images according to ACTIONS in maze env
         self.ghost_img = {}
-        self.ghost_img["front"] = pygame.image.load(
-            "assets/sprites/phantom/PhantomFront.png"
-        )
-        self.ghost_img["back"] = pygame.image.load(
-            "assets/sprites/phantom/PhantomBack.png"
-        )
-        self.ghost_img["left"] = pygame.image.load(
-            "assets/sprites/phantom/PhantomLeft.png"
-        )
-        self.ghost_img["right"] = pygame.image.load(
-            "assets/sprites/phantom/PhantomRight.png"
-        )
-        self.ghost_img["idle"] = pygame.image.load(
-            "assets/sprites/phantom/PhantomIdle.png"
-        )
+        self.ghost_img[0] = pygame.image.load("assets/sprites/phantom/PhantomBack.png")
+        self.ghost_img[1] = pygame.image.load("assets/sprites/phantom/PhantomFront.png")
+        self.ghost_img[2] = pygame.image.load("assets/sprites/phantom/PhantomLeft.png")
+        self.ghost_img[3] = pygame.image.load("assets/sprites/phantom/PhantomRight.png")
+        self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png")
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png")
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png")
         self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png")
@@ -105,13 +110,12 @@ class MazeTrainingScreen:
         play_w, play_h = 170, 44
         ff_w, ff_h = 120, 44
 
-        play_x = self.maze_rect.left + 12
-        ff_x = play_x + play_w + 14
+        play_x = ff_x = self.stats_rect.left + 12
 
         self.btn_play.rect.topleft = (play_x, ctl_y)
         self.btn_play.rect.size = (play_w, play_h)
 
-        self.btn_ff.rect.topleft = (ff_x, ctl_y)
+        self.btn_ff.rect.topleft = (ff_x, ctl_y + play_h + 12)
         self.btn_ff.rect.size = (ff_w, ff_h)
 
         self.btn_back.rect.topleft = (20, 30)
@@ -131,38 +135,17 @@ class MazeTrainingScreen:
         self.screen.blit(title, rect)
 
     def _draw_maze_area(self):
+        if self.maze_grid is None:
+            return
         pygame.draw.rect(self.screen, (12, 14, 22), self.maze_rect)
         pygame.draw.rect(self.screen, (90, 90, 90), self.maze_rect, 3)
         pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
 
-        cfg = MazeConfig(
-            height=12,
-            width=12,
-            use_walls=False,      # hoy: simple y estable
-            max_steps=256,
-            min_manhattan=6,
-        )
-        env = MazeEnv(cfg, seed=0)
-        obs, info = env.reset(seed=0, phase=1)
-        maze = env.render().splitlines()
-
         #Grid placeholder using cfg dimensions
-        cols = cfg.width
-        rows = cfg.height
+        cols = self.maze_cfg.width
+        rows = self.maze_cfg.height
         cell_w = self.maze_rect.width / cols
         cell_h = self.maze_rect.height / rows
-
-        # path = bfs_plan(env.walls, env.agent, env.goal)
-        # if path is None:
-        #     raise RuntimeError("BFS no encontró ruta (no debería pasar si no hay paredes).")
-
-        # actions = path_to_actions(path)
-
-        # done = False
-        # for a in actions:
-        #     obs, r, done, info = env.step(a)
-        #     if done:
-        #         break
 
         for r in range(rows):
             for c in range(cols):
@@ -170,12 +153,13 @@ class MazeTrainingScreen:
                 y = int(self.maze_rect.top + r * cell_h)
                 rect = pygame.Rect(x, y, math.ceil(cell_w), math.ceil(cell_h))
                 image = None
-                if maze[r][c] == "#":
+                char = self.maze_grid[r][c]
+                if char == "#":
                     image = self.wall_img
-                elif maze[r][c] == "G":
+                elif char == "G":
                     image = self.goal_img
-                elif maze[r][c] == "A":
-                    image = self.ghost_img["idle"]
+                elif char == "A":
+                    image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
                 else:
                     image = self.floor_img
                 image = pygame.transform.scale(image, (rect.width, rect.height))
@@ -186,9 +170,9 @@ class MazeTrainingScreen:
         pygame.draw.rect(self.screen, (120, 120, 120), self.stats_rect, 2)
 
         hdr = self.font_text.render("Statistics", False, (230, 230, 230))
-        self.screen.blit(hdr, (self.stats_rect.left + 12, self.stats_rect.top + 12))
+        self.screen.blit(hdr, (self.stats_rect.left + 12, self.btn_ff.rect.bottom + 24))
 
-        y = self.stats_rect.top + 64
+        y = self.btn_ff.rect.bottom + hdr.get_height() + 36
         lines = [
             f"Playing: {'Yes' if self.playing else 'No'}",
             f"Speed: x{self.speeds[self.speed_index]}",
@@ -247,9 +231,32 @@ class MazeTrainingScreen:
     # ----------------------------------
     def run(self):
         while self.running:
-            dt = self.clock.tick(FPS) / 1000.0
+            self.clock.tick(FPS)
             #Recompute layout only if size changed
             self._recalc_layout()
+
+            if self.maze_grid is None:
+                obs, info = self.maze_env.reset(seed=0, phase=0)
+                self.maze_grid = self.maze_env.render().splitlines()
+
+            if self.maze_actions is None:
+                self.current_tick = pygame.time.get_ticks()
+                path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
+                if path is not None:
+                    self.maze_actions = path_to_actions(path)
+            else:
+                # Step through actions at the current speed when playing
+                if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
+                    self.current_tick = pygame.time.get_ticks()
+                    # Step the maze_env with the next action
+                    self.current_action = self.maze_actions.pop(0)
+                    # Update the maze environment and grid 
+                    obs, reward, done, info = self.maze_env.step(self.current_action)
+                    self.maze_grid = self.maze_env.render().splitlines()
+                    if done:
+                        self.current_action = "idle"  #Reset action to idle when episode ends
+                        self.maze_actions = None  #Reset for next episode
+                        self.maze_grid = None  #Trigger new maze generation
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
