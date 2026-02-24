@@ -178,7 +178,7 @@ class MazeGameScreen:
                     self.screen.blit(floor_scaled, rect)
 
                     # Luego dibujar el goal encima (con transparencia)
-                    goal_scaled = pygame.transform.scale(self.goal_img, (rect.width, rect.height))
+                    goal_scaled = pygame.transform.scale(self.player_img, (rect.width, rect.height))
                     self.screen.blit(goal_scaled, rect)
                     continue
                 else:
