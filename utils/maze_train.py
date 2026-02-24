@@ -32,7 +32,7 @@ class MazeTrainingScreen:
         self.playing = False
         self.speed_index = 0
         self.speeds = [1, 2, 4]  # x1, x2, x4
-        self.sleeps = [1000, 500, 250]
+        self.sleeps = [500, 250, 125]  # ms per step for each speed
         self.current_tick = 0
 
         #Flags
@@ -41,7 +41,7 @@ class MazeTrainingScreen:
         self.maze_cfg = MazeConfig(
             height=12,
             width=12,
-            use_walls=False,
+            use_walls=True,
             max_steps=256,
             min_manhattan=6,
         )
@@ -232,7 +232,7 @@ class MazeTrainingScreen:
     def run(self):
         while self.running:
             self.clock.tick(FPS)
-            #Recompute layout only if size changed
+            # Recompute layout only if size changed
             self._recalc_layout()
 
             if self.maze_grid is None:
@@ -244,6 +244,8 @@ class MazeTrainingScreen:
                 path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
                 if path is not None:
                     self.maze_actions = path_to_actions(path)
+                else:
+                    self.maze_grid = None  # Trigger new maze generation if no path found
             else:
                 # Step through actions at the current speed when playing
                 if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
@@ -254,9 +256,9 @@ class MazeTrainingScreen:
                     obs, reward, done, info = self.maze_env.step(self.current_action)
                     self.maze_grid = self.maze_env.render().splitlines()
                     if done:
-                        self.current_action = "idle"  #Reset action to idle when episode ends
-                        self.maze_actions = None  #Reset for next episode
-                        self.maze_grid = None  #Trigger new maze generation
+                        self.current_action = "idle"  # Reset action to idle when episode ends
+                        self.maze_actions = None  # Reset for next episode
+                        self.maze_grid = None  # Trigger new maze generation
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:

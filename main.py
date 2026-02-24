@@ -3,12 +3,11 @@ import pygame
 from utils.visualization import StartScreen
 from utils.selection_menu import SelectionMenuScreen
 from utils.maze_train import MazeTrainingScreen
-from utils.conf import Config, FPS
+from utils.conf import Config
 
 def main():
 
     pygame.init()
-    clock = pygame.time.Clock()
 
     #Define Start screen at the beginning of execution with default parameters
     current_screen_name = "start"
@@ -20,7 +19,6 @@ def main():
     #Pygame loop to keep interaction between screens until the code stops or the loop is broken
     while True:
         new_screen_name = current_screen.run()
-        clock.tick(FPS)
 
         if new_screen_name != current_screen_name:
             if new_screen_name == "start":
