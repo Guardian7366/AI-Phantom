@@ -1,12 +1,12 @@
+from cmath import phase
+
 import pygame
 import math
 
+from ai_phantom.envs.maze.maze_env import MazeConfig, MazeEnv
+from ai_phantom.planners.bfs import bfs_plan, path_to_actions
 from utils.visualization import Button, Icon_Button, SettingsPanel
 from utils.conf import WINDOW_WIDTH, FPS, Config
-
-# Flags to reduce fullscren transtion stuttering (optional)
-FULLSCREEN_FLAGS = pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
-WINDOWED_FLAGS = pygame.RESIZABLE | pygame.HWSURFACE | pygame.DOUBLEBUF
 
 
 class MazeTrainingScreen:
@@ -48,6 +48,26 @@ class MazeTrainingScreen:
         #Storage for arrow rects used in settings overlay
         self._settings_arrow_rects = {}
         self.settings_panel = SettingsPanel(self.screen, self.settings, self.click_sound, self.font_button)
+
+        self.ghost_img = {}
+        self.ghost_img["front"] = pygame.image.load(
+            "assets/sprites/phantom/PhantomFront.png"
+        )
+        self.ghost_img["back"] = pygame.image.load(
+            "assets/sprites/phantom/PhantomBack.png"
+        )
+        self.ghost_img["left"] = pygame.image.load(
+            "assets/sprites/phantom/PhantomLeft.png"
+        )
+        self.ghost_img["right"] = pygame.image.load(
+            "assets/sprites/phantom/PhantomRight.png"
+        )
+        self.ghost_img["idle"] = pygame.image.load(
+            "assets/sprites/phantom/PhantomIdle.png"
+        )
+        self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png")
+        self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png")
+        self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png")
 
     # ----------------------
     # CREATION & LAYOUT
@@ -113,25 +133,53 @@ class MazeTrainingScreen:
     def _draw_maze_area(self):
         pygame.draw.rect(self.screen, (12, 14, 22), self.maze_rect)
         pygame.draw.rect(self.screen, (90, 90, 90), self.maze_rect, 3)
+        pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
 
-        #Grid placeholder using cell size 32
-        cols = max(6, self.maze_rect.width // 32)
-        rows = max(6, self.maze_rect.height // 32)
+        cfg = MazeConfig(
+            height=12,
+            width=12,
+            use_walls=False,      # hoy: simple y estable
+            max_steps=256,
+            min_manhattan=6,
+        )
+        env = MazeEnv(cfg, seed=0)
+        obs, info = env.reset(seed=0, phase=1)
+        maze = env.render().splitlines()
+
+        #Grid placeholder using cfg dimensions
+        cols = cfg.width
+        rows = cfg.height
         cell_w = self.maze_rect.width / cols
         cell_h = self.maze_rect.height / rows
+
+        # path = bfs_plan(env.walls, env.agent, env.goal)
+        # if path is None:
+        #     raise RuntimeError("BFS no encontró ruta (no debería pasar si no hay paredes).")
+
+        # actions = path_to_actions(path)
+
+        # done = False
+        # for a in actions:
+        #     obs, r, done, info = env.step(a)
+        #     if done:
+        #         break
 
         for r in range(rows):
             for c in range(cols):
                 x = int(self.maze_rect.left + c * cell_w)
                 y = int(self.maze_rect.top + r * cell_h)
                 rect = pygame.Rect(x, y, math.ceil(cell_w), math.ceil(cell_h))
-                color = (18, 20, 30) if (r + c) % 2 == 0 else (14, 16, 24)
-                pygame.draw.rect(self.screen, color, rect)
-
-        #Border & placeholder text
-        pygame.draw.rect(self.screen, (150, 150, 150), self.maze_rect, 2)
-        hint = self.font_button.render("Training placeholder", False, (180, 180, 180))
-        self.screen.blit(hint, (self.maze_rect.left + 12, self.maze_rect.top + 12))
+                image = None
+                if maze[r][c] == "#":
+                    image = self.wall_img
+                elif maze[r][c] == "G":
+                    image = self.goal_img
+                elif maze[r][c] == "A":
+                    image = self.ghost_img["idle"]
+                else:
+                    image = self.floor_img
+                image = pygame.transform.scale(image, (rect.width, rect.height))
+                self.screen.blit(image, rect)
 
     def _draw_stats_area(self):
         pygame.draw.rect(self.screen, (16, 18, 26), self.stats_rect)
