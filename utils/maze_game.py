@@ -38,7 +38,7 @@ class MazeGameScreen:
             height=12,
             width=12,
             use_walls=True,
-            max_steps=256,
+            max_steps=20,
             min_manhattan=6,
         )
         self.maze_env = MazeEnv(self.maze_cfg, seed=0)
@@ -229,8 +229,11 @@ class MazeGameScreen:
                     self.current_action = "idle"  # Reset action to idle when episode ends
                     self.maze_actions = None  # Reset for next episode
                     self.maze_grid = None  # Trigger new maze generation
-                    self.caught_sound.play() #Play sound effect when ghost catches the player
-                    self.ghost_score += 1
+                    if info["reached"]:
+                        self.caught_sound.play() #Play sound effect when ghost catches the player
+                        self.ghost_score += 1
+                    else:
+                        self.player_score += 1  # Increment player score when ghost fails to find a pathon if no path found
 
 
     # ----------------------------------
