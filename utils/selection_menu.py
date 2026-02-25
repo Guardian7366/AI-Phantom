@@ -150,7 +150,7 @@ class SelectionMenuScreen:
 
         self.cards = []
 
-        titles = ["Maze", "Archery", "Maze Game", "Coming Soon"]
+        titles = ["Maze", "Coming Soon", "Maze Game", "Coming Soon"]
 
         for row in range(2):
             for col in range(2):
