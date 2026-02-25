@@ -75,7 +75,9 @@ class MazeTrainingScreen:
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
         self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png").convert()
 
+        self.success_num = 0
         self.episode_num = 0
+        self.best_episode = 0
 
     # ----------------------
     # CREATION & LAYOUT
@@ -183,8 +185,8 @@ class MazeTrainingScreen:
             f"Playing: {'Yes' if self.playing else 'No'}",
             f"Speed: x{self.speeds[self.speed_index]}",
             f"Episode: {self.episode_num}",
-            "Mean Reward: -",
-            "Best Success: -",
+            f"Success: {(self.success_num / max(1, self.episode_num)) * 100}%",
+            f"Best: {self.best_episode} steps" if self.best_episode > 0 else "Best: -",
             "",
         ]
         for ln in lines:
@@ -254,6 +256,9 @@ class MazeTrainingScreen:
                     self.maze_actions = None  # Reset for next episode
                     self.maze_grid = None  # Trigger new maze generation
                     self.episode_num += 1
+                    if info["reached"]:
+                        self.success_num += 1
+                        self.best_episode = min(self.best_episode, self.maze_env.t) if self.best_episode > 0 else self.maze_env.t
 
     # ----------------------------------
     # MAIN LOOP
