@@ -38,7 +38,7 @@ class MazeGameScreen:
             height=12,
             width=12,
             use_walls=True,
-            max_steps=20,
+            max_steps=10,
             min_manhattan=6,
         )
         self.maze_env = MazeEnv(self.maze_cfg, seed=0)
@@ -71,8 +71,6 @@ class MazeGameScreen:
         self.player_img = pygame.image.load("assets/sprites/misc/Player.png").convert_alpha()
         self.cross_img = pygame.image.load("assets/sprites/misc/RedCross.png").convert_alpha()
 
-        self.ghost_score = 0
-        self.player_score = 0
         self.mouse_in_maze_pos = None
 
     # ----------------------
@@ -172,21 +170,25 @@ class MazeGameScreen:
             b.draw(self.screen)
 
 
-        self.ghost_title = self.font_button.render("GHOST", False, (230, 230, 230))
-        rectGT = self.ghost_title.get_rect(center=self.ghost_title_pos)
-        self.screen.blit(self.ghost_title, rectGT)
+        #Current Steps Label
+        self.steps_title = self.font_button.render("STEPS", False, (230, 230, 230))
+        rectGT = self.steps_title.get_rect(center=self.ghost_title_pos)
+        self.screen.blit(self.steps_title, rectGT)
 
-        self.ghost_scoreLabel = self.font_button.render(str(self.ghost_score), False, (230, 230, 230))
-        rectGS = self.ghost_scoreLabel.get_rect(center=self.ghost_score_pos)
-        self.screen.blit(self.ghost_scoreLabel, rectGS)
+        #Current Steps
+        self.cur_stepsLabel = self.font_button.render(str(self.maze_env.t), False, (230, 230, 230))
+        rectGS = self.cur_stepsLabel.get_rect(center=self.ghost_score_pos)
+        self.screen.blit(self.cur_stepsLabel, rectGS)
 
-        self.player_title = self.font_button.render("PLAYER", False, (230, 230, 230))
-        rectPT = self.player_title.get_rect(center=self.player_title_pos)
-        self.screen.blit(self.player_title, rectPT)
+        #Max Steps Label
+        self.limit_title = self.font_button.render("LIMIT", False, (230, 230, 230))
+        rectPT = self.limit_title.get_rect(center=self.player_title_pos)
+        self.screen.blit(self.limit_title, rectPT)
 
-        self.player_scoreLabel = self.font_button.render(str(self.player_score), False, (230, 230, 230))
-        rectPS = self.player_scoreLabel.get_rect(center=self.player_score_pos)
-        self.screen.blit(self.player_scoreLabel, rectPS)
+        #Max Steps
+        self.limitLabel = self.font_button.render(str(self.maze_cfg.max_steps), False, (230, 230, 230))
+        rectPS = self.limitLabel.get_rect(center=self.player_score_pos)
+        self.screen.blit(self.limitLabel, rectPS)
 
     # ----------------------------------
     # ELEMENT INTERACTION
@@ -214,8 +216,7 @@ class MazeGameScreen:
             if path is not None:
                 self.maze_actions = path_to_actions(path)
             else:
-                self.maze_grid = None  # Trigger new maze generati
-                self.player_score += 1  # Increment player score when ghost fails to find a pathon if no path found
+                self.maze_grid = None  # Trigger new maze generation
         else:
             # Step through actions at the current speed when playing
             if pygame.time.get_ticks() - self.current_tick > 500:
@@ -231,9 +232,9 @@ class MazeGameScreen:
                     self.maze_grid = None  # Trigger new maze generation
                     if info["reached"]:
                         self.caught_sound.play() #Play sound effect when ghost catches the player
-                        self.ghost_score += 1
                     else:
-                        self.player_score += 1  # Increment player score when ghost fails to find a pathon if no path found
+                        self.maze_cfg.max_steps += 1
+
 
 
     # ----------------------------------
