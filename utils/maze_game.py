@@ -51,8 +51,6 @@ class MazeGameScreen:
         #Compute layout
         self._recalc_layout()
 
-        config.play_maze_music()
-
         self.settings.apply_music_volume()
         self.settings.apply_sfx_volume(self.click_sound)
         self.settings.apply_sfx_volume(self.caught_sound)
@@ -71,9 +69,11 @@ class MazeGameScreen:
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png").convert()
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
         self.player_img = pygame.image.load("assets/sprites/misc/Player.png").convert_alpha()
+        self.cross_img = pygame.image.load("assets/sprites/misc/RedCross.png").convert_alpha()
 
         self.ghost_score = 0
         self.player_score = 0
+        self.mouse_in_maze_pos = None
 
     # ----------------------
     # CREATION & LAYOUT
@@ -154,7 +154,9 @@ class MazeGameScreen:
                     image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
                 else:
                     image = self.floor_img
-                
+                    if self.mouse_in_maze_pos == (r, c):
+                        image = self.cross_img
+
                 # Dibujar piso primero
                 floor_scaled = pygame.transform.scale(self.floor_img, (rect.width, rect.height))
                 self.screen.blit(floor_scaled, rect)
@@ -257,23 +259,31 @@ class MazeGameScreen:
                     return None
 
                 if self.maze_env.goal is None and not self.show_settings:
-                    if event.type == pygame.MOUSEBUTTONDOWN:
-                        # User puts player with click
-                        mouse_pos = pygame.mouse.get_pos()
-                        # Check that mouse is inside maze area
-                        if self.maze_rect.collidepoint(mouse_pos):
-                            # Get grid cell from mouse position
-                            rel_x = mouse_pos[0] - self.maze_rect.left
-                            rel_y = mouse_pos[1] - self.maze_rect.top
-                            cell_w = self.maze_rect.width / self.maze_cfg.width
-                            cell_h = self.maze_rect.height / self.maze_cfg.height
-                            cell_c = int(rel_x // cell_w)
-                            cell_r = int(rel_y // cell_h)
-                            # Check that cell is not a wall or ghost
-                            if self.maze_grid[cell_r][cell_c] not in ("#", "A"):
-                                # Set goal to player position
+                    # Get mouse position
+                    mouse_pos = pygame.mouse.get_pos()
+                    # Check that mouse is inside maze area
+                    if self.maze_rect.collidepoint(mouse_pos):
+                        # Get grid cell from mouse position
+                        rel_x = mouse_pos[0] - self.maze_rect.left
+                        rel_y = mouse_pos[1] - self.maze_rect.top
+                        cell_w = self.maze_rect.width / self.maze_cfg.width
+                        cell_h = self.maze_rect.height / self.maze_cfg.height
+                        cell_c = int(rel_x // cell_w)
+                        cell_r = int(rel_y // cell_h)
+                        # Check that cell is not a wall or ghost
+                        if self.maze_grid[cell_r][cell_c] not in ("#", "A"):
+                            # Store mouse position in maze coordinates for feedback
+                            self.mouse_in_maze_pos = (cell_r, cell_c)
+                            # Set goal to player position when click
+                            if event.type == pygame.MOUSEBUTTONDOWN:
                                 self.maze_env.goal = (cell_r, cell_c)
                                 self.maze_grid = self.maze_env.render().splitlines()
+                        else:
+                            # Clear stored position if hovering over invalid cell
+                            self.mouse_in_maze_pos = None
+                    else:
+                        # Clear stored position when mouse leaves maze area
+                        self.mouse_in_maze_pos = None
 
                 if self.show_settings:
                     if event.type == pygame.MOUSEBUTTONDOWN:
