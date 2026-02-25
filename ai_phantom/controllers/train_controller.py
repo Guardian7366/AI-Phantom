@@ -65,7 +65,7 @@ class TrainController:
         # --- Eval env separado (NO tocar self.env) ---
         eval_env_cfg = MazeConfig(**self.env.cfg.__dict__)
         eval_env = MazeEnv(eval_env_cfg, seed=int(self.cfg.seed + 999_999))
-
+        sync_horizon([eval_env], self.ppo_cfg.rollout_len, name="TrainController(EVAL)")
         self.evaluator = EvalController(env=eval_env, policy=self.policy, device=self.device)
 
     def _reset_episode(self) -> None:

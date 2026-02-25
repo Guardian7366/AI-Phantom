@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Tuple
 
 import torch
@@ -34,7 +33,7 @@ class CnnActorCritic(nn.Module):
         # inferir tamaño del flatten
         with torch.no_grad():
             dummy = torch.zeros(1, c, h, w)
-            n_flat = self.backbone(dummy).view(1, -1).shape[1]
+            n_flat = self.backbone(dummy).flatten(1).shape[1]  # ✅ antes view()
 
         self.mlp = nn.Sequential(
             nn.Flatten(),
@@ -67,6 +66,10 @@ class CnnActorCritic(nn.Module):
           logits: (B, A)
           value: (B,)  (squeeze)
         """
+        # ✅ safety net: si llega algo corrupto, no explota el update
+        if not torch.isfinite(obs).all():
+            obs = torch.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+
         x = self.backbone(obs)
         x = self.mlp(x)
         logits = self.pi(x)

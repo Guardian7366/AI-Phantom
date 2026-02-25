@@ -78,12 +78,17 @@ class MazeConfig:
     # ✅ Diamond: Potential-based shaping (PBRS) con BFS
     # ------------------------------
     use_potential_shaping: bool = True
-    potential_gamma: float = 0.99      # normalmente = PPO gamma
+    potential_gamma: float = 1.0      # normalmente = PPO gamma
     potential_coef: float = 0.05       # lambda del shaping
     potential_clip: float = 0.10       # clamp del shaping (seguro)
 
     # Si True, desactiva el shaping "legacy" progress_reward para evitar doble señal
     disable_legacy_progress_when_potential: bool = True
+
+    # ✅ Solvable walls guarantee
+    ensure_solvable_walls: bool = True
+    rebuild_max_tries: int = 50
+    rebuild_seed_stride: int = 9973  # salto para reintentos reproducibles
 
 
 class MazeEnv:
@@ -134,30 +139,69 @@ class MazeEnv:
         return walls
 
     def rebuild_walls(self, *, seed: Optional[int] = None, wall_prob: Optional[float] = None) -> None:
-        """
-        ✅ C1: reconstruye el laberinto fijo (walls) de forma reproducible.
-        - seed: si se pasa, reseedea el RNG interno SOLO para reconstruir walls.
-        - wall_prob: si se pasa, actualiza cfg.wall_prob antes de construir.
-
-        Nota: obs_shape NO cambia (walls channel siempre existe).
-        """
         self._dist_map = None
-        
+
         self._pos_hist.clear()
         self._no_progress = 0
         self._loop_hits = 0
         self._last_dist = -1
 
-        if seed is not None:
-            self.rng = np.random.default_rng(int(seed))
-
         wp = float(self.cfg.wall_prob) if wall_prob is None else float(wall_prob)
-        # construye usando wp sin mutar cfg permanentemente
         old = float(self.cfg.wall_prob)
-        self.cfg.wall_prob = wp
-        self.walls = self._build_fixed_maze()
-        self.cfg.wall_prob = old
-        # No tocamos agent/goal aquí.
+
+        # base seed reproducible
+        base_seed = int(seed) if seed is not None else None
+
+        tries = int(getattr(self.cfg, "rebuild_max_tries", 50))
+        stride = int(getattr(self.cfg, "rebuild_seed_stride", 9973))
+        ensure = bool(getattr(self.cfg, "ensure_solvable_walls", True))
+
+        for k in range(max(1, tries)):
+            if base_seed is not None:
+                self.rng = np.random.default_rng(int(base_seed + k * stride))
+
+            self.cfg.wall_prob = wp
+            walls = self._build_fixed_maze()
+            self.cfg.wall_prob = old
+
+            if not ensure:
+                self.walls = walls
+                return
+
+            # --- Heurística “solvable enough” ---
+            # Queremos que exista una región conectada grande, y que haya celdas libres suficientes.
+            free = int((~walls).sum())
+            if free < int(self.cfg.height * self.cfg.width * 0.35):
+                continue  # demasiado bloqueado
+
+            # Distancias desde una celda libre (0,0 si es libre)
+            start = (0, 0) if not walls[0, 0] else None
+            if start is None:
+                # busca cualquier celda libre rápida
+                idx = np.argwhere(~walls)
+                if idx.size == 0:
+                    continue
+                start = (int(idx[0, 0]), int(idx[0, 1]))
+
+            dm = bfs_distance_map(walls, start)
+            reachable = int((dm >= 0).sum())
+
+            # Requerimos conectividad decente
+            if reachable < int(self.cfg.height * self.cfg.width * 0.45):
+                continue
+
+            # ✅ Menos sesgo que "esquina-esquina":
+            # requerimos que exista alguna pareja "bien separada" dentro de la componente alcanzable.
+            min_far = max(8, int(getattr(self.cfg, "min_manhattan", 6)))
+            # buscamos una celda alcanzable con distancia >= min_far desde start
+            if (dm >= min_far).sum() == 0:
+                continue
+
+            self.walls = walls
+            return
+
+        # Si no encontramos “bueno”, nos quedamos con el último (pero logeable)
+        self.walls = walls
 
     # -------------------- Public API --------------------
     def reset(self, seed: Optional[int] = None, phase: int = 0) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -247,25 +291,35 @@ class MazeEnv:
             bumped = True
             reward += float(self.cfg.wall_bump_penalty)
             nr, nc = ar, ac
-            # ✅ FIX: un bump NO debe contar como estancamiento acumulado
+
             if bool(self.cfg.enable_loop_detection):
-                self._no_progress = 0   
+                if self._dist_map is not None:
+                    d_now = int(self._dist_map[ar, ac])
+                    if d_now != -1:
+                        # bump = no avance => cuenta como no_progress
+                        if self._last_dist != -1 and d_now >= int(self._last_dist):
+                            self._no_progress += 1
+                        else:
+                            self._no_progress = 0
+                        self._last_dist = d_now
+                else:
+                    self._no_progress = 0
+                    self._last_dist = -1
         else:
 
-            # ✅ Diamond: Potential-based shaping con BFS
+            # ✅ Diamond: Potential-based shaping con BFS (PBRS real)
             if (self._dist_map is not None) and bool(self.cfg.use_potential_shaping):
 
                 d0 = int(self._dist_map[ar, ac])
                 d1 = int(self._dist_map[nr, nc])
 
                 if d0 != -1 and d1 != -1:
-
-                    gamma_p = float(self.cfg.potential_gamma)
                     lam = float(self.cfg.potential_coef)
+                    g = float(self.cfg.potential_gamma)
 
-                    # F(s) = -d(s)
-                    # gamma*F(s') - F(s) = -gamma*d1 + d0
-                    shaped = lam * (float(d0) - gamma_p * float(d1))
+                    # Potencial Phi(s) = -dist(s)
+                    # PBRS: lam * (gamma * Phi(s') - Phi(s)) = lam * (d0 - gamma*d1)
+                    shaped = lam * (float(d0) - g * float(d1))
 
                     clip = float(self.cfg.potential_clip)
                     if clip > 0.0:
@@ -321,19 +375,25 @@ class MazeEnv:
             # 1) Estancamiento por BFS (no mejora distancia)
             if self._dist_map is not None:
                 d_now = int(self._dist_map[self.agent[0], self.agent[1]])
-                d_prev = int(self._dist_map[prev_pos[0], prev_pos[1]])
-                # si es inválida (-1), no contamos estancamiento
-                if d_prev != -1 and d_now != -1:
-                    # ✅ No cuentes bumps como “no-progress” (evita matar episodios rescatables)
-                    if bumped:
+
+                # Si por alguna razón fuese inválida, resetea contador y memoria
+                if d_now == -1:
+                    self._no_progress = 0
+                    self._last_dist = -1
+                else:
+                    # Si no teníamos memoria previa, inicializa
+                    if self._last_dist == -1:
+                        self._last_dist = d_now
                         self._no_progress = 0
                     else:
-                        if d_now >= d_prev:
+                        # No progreso si no disminuye la distancia (d_now >= last)
+                        if d_now >= int(self._last_dist):
                             self._no_progress += 1
                         else:
                             self._no_progress = 0
-                else:
-                    self._no_progress = 0
+
+                        # ✅ IMPORTANTÍSIMO: actualiza memoria SIEMPRE
+                        self._last_dist = d_now
 
                 if self._no_progress >= int(self.cfg.stagnation_steps):
                     looped = True
@@ -425,10 +485,10 @@ class MazeEnv:
             term_reason = "reached"
         elif bool(done):
             # si terminó y no llegó
-            if bool(looped) and int(self._loop_hits) >= 1 and bool(self.cfg.terminate_on_loop):
-                term_reason = "loop"
-            elif self.t >= int(self.cfg.max_steps):
+            if self.t >= int(self.cfg.max_steps):
                 term_reason = "timeout"
+            elif bool(looped) and int(self._loop_hits) >= 1 and bool(self.cfg.terminate_on_loop):
+                term_reason = "loop"
             else:
                 term_reason = "other"
 
@@ -500,10 +560,11 @@ class MazeEnv:
                 else:
                     dn = dm / dmax
 
-                dn[unreachable] = 1.0
-
                 if bool(self.cfg.dist_invert):
                     dn = 1.0 - dn
+
+                # ✅ unreachable siempre 0.0 (señal “mala / no alcanzable”)
+                dn[unreachable] = 0.0
 
                 d = dn.astype(np.float32)
 

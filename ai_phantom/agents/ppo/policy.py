@@ -3,9 +3,11 @@ from __future__ import annotations
 from .logits_utils import sanitize_logits_keep_neginf
 from dataclasses import dataclass
 from typing import Optional
+from .logits_utils_extra import fix_all_neginf_rows
 
 import torch
 import torch.nn.functional as F
+from torch.distributions import Categorical
 
 from .action_mask import mask_invalid_actions
 
@@ -15,7 +17,6 @@ class ActOutput:
     action: torch.Tensor  # shape [B]
     logp: torch.Tensor    # shape [B]
     value: torch.Tensor   # shape [B]
-
 
 class Policy:
     """
@@ -56,33 +57,48 @@ class Policy:
 
         # ✅ Protección numérica igual que trainer
         logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
-
-        logp_all = F.log_softmax(logits, dim=-1)
-        probs = logp_all.exp()
+        logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=0)
+        
+                # Construye distribución EXACTAMENTE como trainer (más estable que probs=exp(log_softmax))
+        dist = Categorical(logits=logits)
 
         if deterministic:
-            maxp = probs.max(dim=-1, keepdim=True).values
-            is_best = probs >= (maxp - self.tie_eps)
+            # Selección determinista con tie-break (sobre logits, equivalente a sobre probs)
+            maxlog = logits.max(dim=-1, keepdim=True).values
+            is_best = logits >= (maxlog - self.tie_eps)
 
             actions = []
-            for b in range(probs.size(0)):
+            for b in range(logits.size(0)):
                 best_idx = torch.nonzero(is_best[b], as_tuple=False).squeeze(-1)
+                best_idx_cpu = best_idx.detach().to("cpu")
+
                 if best_idx.numel() == 1:
-                    a = int(best_idx.item())
+                    a = int(best_idx_cpu.item())
                 else:
                     if self._gen is None:
-                        a = int(torch.argmax(probs[b]).item())
+                        # fallback determinista si no hay generador: argmax
+                        a = int(torch.argmax(logits[b]).item())
                     else:
+                        # tie-break reproducible en CPU
                         w = torch.ones((best_idx.numel(),), dtype=torch.float32)  # CPU
                         j = int(torch.multinomial(w, 1, generator=self._gen).item())
                         a = int(best_idx[j].item())
+
                 actions.append(a)
 
             action = torch.tensor(actions, device=obs.device, dtype=torch.long)
         else:
-            action = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            # Modo estocástico: sample directo de Categorical(logits)
+            action = dist.sample()
 
-        chosen_logp = logp_all.gather(-1, action.unsqueeze(-1)).squeeze(-1)
+        # logp consistente con dist (evita depender de log_softmax manual)
+        chosen_logp = dist.log_prob(action)
+        
+        # ✅ Solo corregimos NaN/+inf. -inf lo dejamos (si llegara a ocurrir, es señal real de máscara)
+        chosen_logp = torch.nan_to_num(chosen_logp, nan=0.0, posinf=0.0)
+
+        value = torch.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+
         return ActOutput(action=action, logp=chosen_logp, value=value)
 
     @torch.no_grad()

@@ -93,7 +93,14 @@ class RolloutBuffer:
         if self.ptr == self.T:
             self.full = True
 
-    def compute_returns_and_advantages(self, last_value: float, last_done: bool, gamma: float, gae_lambda: float) -> None:
+    def compute_returns_and_advantages(
+            self,
+            last_value: float,
+            last_done: bool,
+            gamma: float,
+            gae_lambda: float,
+            exclude_from_adv_norm: Optional[torch.Tensor] = None,
+        ) -> None:
         if not self.full:
             raise RuntimeError("Buffer no está lleno: junta T pasos antes de compute_returns_and_advantages().")
 
@@ -111,7 +118,7 @@ class RolloutBuffer:
                 next_nonterminal = next_nonterminal_last
             else:
                 next_value = float(self.values[t + 1].item())
-                # ✅ done almacenado es done_t (resultado del paso t), así que el gate es (1 - done_t)
+                # ✅ Gate correcto: done_t bloquea bootstrap hacia V_{t+1}
                 next_nonterminal = 1.0 - float(self.dones[t].item())
 
             delta = float(self.rewards[t].item()) + gamma * next_value * next_nonterminal - float(self.values[t].item())
@@ -121,9 +128,41 @@ class RolloutBuffer:
         # ✅ NO reasignes tensores (ver punto 2)
         self.returns.copy_(self.advantages + self.values)
 
-        adv_mean = self.advantages.mean()
-        adv_std = self.advantages.std(unbiased=False).clamp_min(1e-8)
+        # --- Normalización de ventajas ---
+        # Si no se especifica, por defecto excluye teacher steps (self.is_teacher).
+        if exclude_from_adv_norm is None:
+            exclude_from_adv_norm = self.is_teacher
+
+        # Asegura tensor CPU/shape (T,)
+        try:
+            ex = exclude_from_adv_norm
+            if not torch.is_tensor(ex):
+                ex = torch.as_tensor(ex, dtype=torch.float32)
+            ex = ex.to(device=self.advantages.device, dtype=torch.float32)
+            ex = ex.view(-1)
+            if ex.numel() != self.T:
+                raise ValueError("exclude_from_adv_norm wrong length")
+        except Exception:
+            # si algo sale raro, no arriesgamos: normaliza con todo
+            ex = None
+
+        if ex is not None:
+            mask = (ex < 0.5)
+            if bool(mask.any()):
+                adv_mean = self.advantages[mask].mean()
+                adv_std = self.advantages[mask].std(unbiased=False).clamp_min(1e-8)
+            else:
+                adv_mean = self.advantages.mean()
+                adv_std = self.advantages.std(unbiased=False).clamp_min(1e-8)
+        else:
+            adv_mean = self.advantages.mean()
+            adv_std = self.advantages.std(unbiased=False).clamp_min(1e-8)
+
         self.advantages.sub_(adv_mean).div_(adv_std)
+
+        # --- Guard final: evita propagar NaN/inf (no debería pasar, pero protege) ---
+        self.advantages.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
+        self.returns.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
 
     def iter_minibatches(self, minibatch_size: int, shuffle: bool = True) -> Iterator[RolloutBatch]:
         if not self.full:
@@ -139,6 +178,8 @@ class RolloutBuffer:
         for start in range(0, self.T, mb):
             end = min(start + mb, self.T)
             b = idx[start:end]
+            if b.size == 0:
+                continue
 
             # non_blocking funciona “de verdad” si pin_memory=True
             yield RolloutBatch(
