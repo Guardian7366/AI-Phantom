@@ -1,7 +1,6 @@
-from cmath import phase
-
 import pygame
 import math
+import random
 
 from ai_phantom.envs.maze.maze_env import MazeConfig, MazeEnv
 from ai_phantom.planners.bfs import bfs_plan, path_to_actions
@@ -72,6 +71,9 @@ class MazeGameScreen:
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png").convert()
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
         self.player_img = pygame.image.load("assets/sprites/misc/Player.png").convert_alpha()
+
+        self.ghost_score = 0
+        self.player_score = 0
 
     # ----------------------
     # CREATION & LAYOUT
@@ -168,21 +170,21 @@ class MazeGameScreen:
             b.draw(self.screen)
 
 
-        ghost_title = self.font_button.render("GHOST", False, (230, 230, 230))
-        rectGT = ghost_title.get_rect(center=self.ghost_title_pos)
-        self.screen.blit(ghost_title, rectGT)
+        self.ghost_title = self.font_button.render("GHOST", False, (230, 230, 230))
+        rectGT = self.ghost_title.get_rect(center=self.ghost_title_pos)
+        self.screen.blit(self.ghost_title, rectGT)
 
-        ghost_score = self.font_button.render("0", False, (230, 230, 230))
-        rectGS = ghost_score.get_rect(center=self.ghost_score_pos)
-        self.screen.blit(ghost_score, rectGS)
+        self.ghost_scoreLabel = self.font_button.render(str(self.ghost_score), False, (230, 230, 230))
+        rectGS = self.ghost_scoreLabel.get_rect(center=self.ghost_score_pos)
+        self.screen.blit(self.ghost_scoreLabel, rectGS)
 
-        player_title = self.font_button.render("PLAYER", False, (230, 230, 230))
-        rectPT = player_title.get_rect(center=self.player_title_pos)
-        self.screen.blit(player_title, rectPT)
+        self.player_title = self.font_button.render("PLAYER", False, (230, 230, 230))
+        rectPT = self.player_title.get_rect(center=self.player_title_pos)
+        self.screen.blit(self.player_title, rectPT)
 
-        player_score = self.font_button.render("0", False, (230, 230, 230))
-        rectPS = player_score.get_rect(center=self.player_score_pos)
-        self.screen.blit(player_score, rectPS)
+        self.player_scoreLabel = self.font_button.render(str(self.player_score), False, (230, 230, 230))
+        rectPS = self.player_scoreLabel.get_rect(center=self.player_score_pos)
+        self.screen.blit(self.player_scoreLabel, rectPS)
 
     # ----------------------------------
     # ELEMENT INTERACTION
@@ -210,7 +212,8 @@ class MazeGameScreen:
             if path is not None:
                 self.maze_actions = path_to_actions(path)
             else:
-                self.maze_grid = None  # Trigger new maze generation if no path found
+                self.maze_grid = None  # Trigger new maze generati
+                self.player_score += 1  # Increment player score when ghost fails to find a pathon if no path found
         else:
             # Step through actions at the current speed when playing
             if pygame.time.get_ticks() - self.current_tick > 500:
@@ -225,6 +228,7 @@ class MazeGameScreen:
                     self.maze_actions = None  # Reset for next episode
                     self.maze_grid = None  # Trigger new maze generation
                     self.caught_sound.play() #Play sound effect when ghost catches the player
+                    self.ghost_score += 1
 
 
     # ----------------------------------
@@ -237,6 +241,8 @@ class MazeGameScreen:
             self._recalc_layout()
 
             if self.maze_grid is None:
+                seed = random.randint(0, 9999)
+                self.maze_env.rebuild_walls(seed=seed)  # Ensure new maze layout
                 obs, info = self.maze_env.reset(seed=0, phase=0)
                 self.maze_env.goal = None  # Clear goal to allow player placement
                 self.maze_grid = self.maze_env.render().splitlines()

@@ -74,6 +74,8 @@ class MazeTrainingScreen:
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
         self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png").convert()
 
+        self.episode_num = 0
+
     # ----------------------
     # CREATION & LAYOUT
     # ----------------------
@@ -179,7 +181,7 @@ class MazeTrainingScreen:
         lines = [
             f"Playing: {'Yes' if self.playing else 'No'}",
             f"Speed: x{self.speeds[self.speed_index]}",
-            "Episodes: 0",
+            f"Episode: {self.episode_num}",
             "Mean Reward: -",
             "Best Success: -",
             "",
@@ -262,6 +264,7 @@ class MazeTrainingScreen:
                         self.current_action = "idle"  # Reset action to idle when episode ends
                         self.maze_actions = None  # Reset for next episode
                         self.maze_grid = None  # Trigger new maze generation
+                        self.episode_num += 1
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
