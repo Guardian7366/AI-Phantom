@@ -21,18 +21,15 @@ class MazeGameScreen:
         self.settings = config.settings
         self.screen = config.screen
         self.click_sound = config.click_sound
+        self.caught_sound = config.caught_sound
         self.font_title = config.font_title
         self.font_statsTitle = config.font_statsTitle
         self.font_button = config.font_button
         self.font_text = config.font_text
-
+        
         self.running = True
 
         #Playback state
-        self.playing = False
-        self.speed_index = 0
-        self.speeds = [1, 2, 4]  # x1, x2, x4
-        self.sleeps = [500, 250, 125]  # ms per step for each speed
         self.current_tick = 0
 
         #Flags
@@ -55,9 +52,11 @@ class MazeGameScreen:
         #Compute layout
         self._recalc_layout()
 
-        #Apply shared sound settings
+        config.play_maze_music()
+
         self.settings.apply_music_volume()
         self.settings.apply_sfx_volume(self.click_sound)
+        self.settings.apply_sfx_volume(self.caught_sound)
 
         #Storage for arrow rects used in settings overlay
         self._settings_arrow_rects = {}
@@ -70,7 +69,6 @@ class MazeGameScreen:
         self.ghost_img[2] = pygame.image.load("assets/sprites/phantom/PhantomLeft.png").convert_alpha()
         self.ghost_img[3] = pygame.image.load("assets/sprites/phantom/PhantomRight.png").convert_alpha()
         self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png").convert_alpha()
-
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png").convert()
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
         self.player_img = pygame.image.load("assets/sprites/misc/Player.png").convert_alpha()
@@ -82,8 +80,6 @@ class MazeGameScreen:
         #Main buttons
         self.btn_back = Button((20, 20, 140, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
         self.btn_settings = Icon_Button((WINDOW_WIDTH - 160, 20, 75, 75), "assets/images/gear.png", self.font_button, (40, 40, 60), (80, 80, 120), click_sound=self.click_sound)
-        #Play bbutton
-        #self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
 
     def _recalc_layout(self):
         width, height = self.screen.get_size()
@@ -113,23 +109,11 @@ class MazeGameScreen:
         self.player_title_pos = (width * 0.75, 30)
         self.player_score_pos = (width * 0.75, 65)
 
-        #Control positions
-        ctl_y = area_top + 10
-        play_w, play_h = 170, 44
-        ff_w, ff_h = 120, 44
-
-        play_x = ff_x = self.stats_rect.left + 12
-
-        #self.btn_play.rect.topleft = (play_x, ctl_y)
-        #self.btn_play.rect.size = (play_w, play_h)
-
         self.btn_back.rect.topleft = (20, 30)
         self.btn_back.rect.size = (140, 50)
 
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)
-
-        #btn_back_overlay will be positioned inside the overlay panel when drawing
 
     # ----------------------------------
     # DRAW SCREEN ELEMENTS
@@ -153,57 +137,28 @@ class MazeGameScreen:
         cell_w = self.maze_rect.width / cols
         cell_h = self.maze_rect.height / rows
 
-        ghost_row = None
-        ghost_col = None
-
-        # ===== 1. DIBUJAR MAPA (SIN FANTASMA) =====
         for r in range(rows):
             for c in range(cols):
                 x = int(self.maze_rect.left + c * cell_w)
                 y = int(self.maze_rect.top + r * cell_h)
                 rect = pygame.Rect(x, y, math.ceil(cell_w), math.ceil(cell_h))
-
+                image = None
                 char = self.maze_grid[r][c]
-
-                if char == "A":
-                    # Guardamos posición del fantasma pero NO lo dibujamos aquí
-                    ghost_row = r
-                    ghost_col = c
-                    image = self.floor_img  # piso debajo del fantasma
-                elif char == "#":
+                if char == "#":
                     image = self.wall_img
                 elif char == "G":
-                    # Dibujar piso primero
-                    floor_scaled = pygame.transform.scale(self.floor_img, (rect.width, rect.height))
-                    self.screen.blit(floor_scaled, rect)
-
-                    # Luego dibujar el goal encima (con transparencia)
-                    goal_scaled = pygame.transform.scale(self.player_img, (rect.width, rect.height))
-                    self.screen.blit(goal_scaled, rect)
-                    continue
+                    image = self.player_img
+                elif char == "A":
+                    image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
                 else:
                     image = self.floor_img
-
-                scaled = pygame.transform.scale(image, (rect.width, rect.height))
-                self.screen.blit(scaled, rect)
-
-        # ===== 2. DIBUJAR FANTASMA ENCIMA (CAPA SUPERIOR) =====
-        if ghost_row is not None and ghost_col is not None:
-            ghost_img = self.ghost_img.get(
-                self.current_action,
-                self.ghost_img["idle"]
-            )
-
-            ghost_w = math.ceil(cell_w)
-            ghost_h = math.ceil(cell_h)
-
-            # smoothscale = mejor calidad y menos halo
-            ghost_scaled = pygame.transform.smoothscale(ghost_img, (ghost_w, ghost_h))
-
-            ghost_x = int(self.maze_rect.left + ghost_col * cell_w)
-            ghost_y = int(self.maze_rect.top + ghost_row * cell_h)
-
-            self.screen.blit(ghost_scaled, (ghost_x, ghost_y))
+                
+                # Dibujar piso primero
+                floor_scaled = pygame.transform.scale(self.floor_img, (rect.width, rect.height))
+                self.screen.blit(floor_scaled, rect)
+                # Luego dibujar el sprite correspondiente encima
+                image = pygame.transform.scale(image, (rect.width, rect.height))
+                self.screen.blit(image, rect)
 
     def _draw_controls(self):
         mouse_pos = pygame.mouse.get_pos()
@@ -229,10 +184,6 @@ class MazeGameScreen:
         rectPS = player_score.get_rect(center=self.player_score_pos)
         self.screen.blit(player_score, rectPS)
 
-
-        #Synchronize labels
-        #self.btn_play.text = "PAUSE" if self.playing else "PLAY"
-
     # ----------------------------------
     # ELEMENT INTERACTION
     # ----------------------------------
@@ -249,14 +200,9 @@ class MazeGameScreen:
             #Display setting panel
             self.show_settings = True
             return None
-        """
-        if self.btn_play.is_clicked(event):
-            #Switch Play button mode
-            self.playing = not self.playing
-            return None
-        """
+
         return None
-    
+
     def move_ghost(self):
         if self.maze_actions is None:
             self.current_tick = pygame.time.get_ticks()
@@ -267,7 +213,7 @@ class MazeGameScreen:
                 self.maze_grid = None  # Trigger new maze generation if no path found
         else:
             # Step through actions at the current speed when playing
-            if pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
+            if pygame.time.get_ticks() - self.current_tick > 500:
                 self.current_tick = pygame.time.get_ticks()
                 # Step the maze_env with the next action
                 self.current_action = self.maze_actions.pop(0)
@@ -278,6 +224,26 @@ class MazeGameScreen:
                     self.current_action = "idle"  # Reset action to idle when episode ends
                     self.maze_actions = None  # Reset for next episode
                     self.maze_grid = None  # Trigger new maze generation
+                    self.caught_sound.play() #Play sound effect when ghost catches the player
+
+
+    # ----------------------------------
+    # MAIN LOOP
+    # ----------------------------------
+    def run(self):
+        while self.running:
+            self.clock.tick(FPS)
+            # Recompute layout only if size changed
+            self._recalc_layout()
+
+            if self.maze_grid is None:
+                obs, info = self.maze_env.reset(seed=0, phase=0)
+                self.maze_env.goal = None  # Clear goal to allow player placement
+                self.maze_grid = self.maze_env.render().splitlines()
+
+            if self.maze_env.goal is not None:
+                self.move_ghost()  # Start the ghost movement logic
+
 
     # ----------------------------------
     # MAIN LOOP
@@ -301,7 +267,7 @@ class MazeGameScreen:
                     pygame.quit()
                     return None
 
-                if self.maze_env.goal is None:
+                if self.maze_env.goal is None and not self.show_settings:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         # User puts player with click
                         mouse_pos = pygame.mouse.get_pos()

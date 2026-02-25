@@ -124,8 +124,6 @@ class MazeTrainingScreen:
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)
 
-        #btn_back_overlay will be positioned inside the overlay panel when drawing
-
     # ----------------------------------
     # DRAW SCREEN ELEMENTS
     # ----------------------------------
@@ -147,48 +145,28 @@ class MazeTrainingScreen:
         cell_w = self.maze_rect.width / cols
         cell_h = self.maze_rect.height / rows
 
-        ghost_row = None
-        ghost_col = None
-
-        # ===== DIBUJAR LABERINTO (SIN FANTASMA) =====
         for r in range(rows):
             for c in range(cols):
                 x = int(self.maze_rect.left + c * cell_w)
                 y = int(self.maze_rect.top + r * cell_h)
                 rect = pygame.Rect(x, y, math.ceil(cell_w), math.ceil(cell_h))
-
+                image = None
                 char = self.maze_grid[r][c]
-
-                if char == "A":
-                    ghost_row = r
-                    ghost_col = c
-                    image = self.floor_img  # piso debajo del fantasma
-                elif char == "#":
+                if char == "#":
                     image = self.wall_img
                 elif char == "G":
                     image = self.goal_img
+                elif char == "A":
+                    image = self.ghost_img.get(self.current_action, self.ghost_img["idle"])
                 else:
                     image = self.floor_img
-
-                scaled = pygame.transform.scale(image, (rect.width, rect.height))
-                self.screen.blit(scaled, rect)
-
-        # ===== DIBUJAR FANTASMA ENCIMA =====
-        if ghost_row is not None and ghost_col is not None:
-            ghost_img = self.ghost_img.get(
-                self.current_action,
-                self.ghost_img["idle"]
-            )
-
-            ghost_w = math.ceil(cell_w)
-            ghost_h = math.ceil(cell_h)
-
-            ghost_scaled = pygame.transform.scale(ghost_img, (ghost_w, ghost_h))
-
-            ghost_x = int(self.maze_rect.left + ghost_col * cell_w)
-            ghost_y = int(self.maze_rect.top + ghost_row * cell_h)
-
-            self.screen.blit(ghost_scaled, (ghost_x, ghost_y))
+                
+                # Dibujar piso primero
+                floor_scaled = pygame.transform.scale(self.floor_img, (rect.width, rect.height))
+                self.screen.blit(floor_scaled, rect)
+                # Luego dibujar el sprite correspondiente encima
+                image = pygame.transform.scale(image, (rect.width, rect.height))
+                self.screen.blit(image, rect)
 
     def _draw_stats_area(self):
         pygame.draw.rect(self.screen, (16, 18, 26), self.stats_rect)
