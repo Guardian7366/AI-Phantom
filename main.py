@@ -12,6 +12,7 @@ def main():
 
     #Define Start screen at the beginning of execution with default parameters
     current_screen_name = "start"
+    prev_screen_name = "start"
     new_screen_name = current_screen_name
     config = Config()
 
@@ -25,16 +26,20 @@ def main():
         if new_screen_name != current_screen_name:
             if new_screen_name == "start":
                 current_screen = StartScreen(config)
-                config.play_menu_music()
+                prev_screen_name = "start"
             elif new_screen_name == "selection":
                 current_screen = SelectionMenuScreen(config)
-                config.play_menu_music()
+                if prev_screen_name != "start":
+                    config.play_menu_music() 
+                prev_screen_name = "selection"
             elif new_screen_name == "maze_train":
                 current_screen = MazeTrainingScreen(config)
+                prev_screen_name = "maze_train"
                 config.play_maze_music()
             elif new_screen_name == "maze_game":
                 current_screen = MazeGameScreen(config)
                 config.play_maze_music()
+                prev_screen_name = "maze_game"
             else:
                 break
             current_screen_name = new_screen_name
