@@ -75,14 +75,17 @@ class MazeTrainingScreen:
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
         self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png").convert()
 
+        self.success_num = 0
         self.episode_num = 0
+        self.best_episode = 0
+        self.worst_episode = 0
 
     # ----------------------
     # CREATION & LAYOUT
     # ----------------------
     def _create_buttons(self):
         #Main buttons
-        self.btn_back = Button((20, 20, 140, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
+        self.btn_back = Icon_Button((20, 20, 70, 70), "assets/images/back.png", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
         self.btn_settings = Icon_Button((WINDOW_WIDTH - 160, 20, 75, 75), "assets/images/gear.png", self.font_button, (40, 40, 60), (80, 80, 120), click_sound=self.click_sound)
         #Play bbutton
         self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
@@ -122,7 +125,7 @@ class MazeTrainingScreen:
         self.btn_ff.rect.size = (ff_w, ff_h)
 
         self.btn_back.rect.topleft = (20, 30)
-        self.btn_back.rect.size = (140, 50)
+        self.btn_back.rect.size = (70, 70)
 
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)
@@ -183,9 +186,9 @@ class MazeTrainingScreen:
             f"Playing: {'Yes' if self.playing else 'No'}",
             f"Speed: x{self.speeds[self.speed_index]}",
             f"Episode: {self.episode_num}",
-            "Mean Reward: -",
-            "Best Success: -",
-            "",
+            f"Success: {int((self.success_num / max(1, self.episode_num)) * 100)}%",
+            f"Best: {self.best_episode} steps" if self.best_episode > 0 else "Best: -",
+            f"Worst: {self.worst_episode} steps" if self.worst_episode > 0 else "Worst: -",
         ]
         for ln in lines:
             surf = self.font_text.render(ln, False, (200, 200, 200))
@@ -254,6 +257,10 @@ class MazeTrainingScreen:
                     self.maze_actions = None  # Reset for next episode
                     self.maze_grid = None  # Trigger new maze generation
                     self.episode_num += 1
+                    if info["reached"]:
+                        self.success_num += 1
+                        self.best_episode = min(self.best_episode, self.maze_env.t) if self.best_episode > 0 else self.maze_env.t
+                        self.worst_episode = max(self.worst_episode, self.maze_env.t)
 
     # ----------------------------------
     # MAIN LOOP
