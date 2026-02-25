@@ -251,24 +251,6 @@ class MazeGameScreen:
             if self.maze_env.goal is not None:
                 self.move_ghost()  # Start the ghost movement logic
 
-
-    # ----------------------------------
-    # MAIN LOOP
-    # ----------------------------------
-    def run(self):
-        while self.running:
-            self.clock.tick(FPS)
-            # Recompute layout only if size changed
-            self._recalc_layout()
-
-            if self.maze_grid is None:
-                obs, info = self.maze_env.reset(seed=0, phase=0)
-                self.maze_env.goal = None  # Clear goal to allow player placement
-                self.maze_grid = self.maze_env.render().splitlines()
-
-            if self.maze_env.goal is not None:
-                self.move_ghost()  # Start the ghost movement logic
-
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
