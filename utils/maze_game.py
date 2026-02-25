@@ -242,8 +242,9 @@ class MazeGameScreen:
 
             if self.maze_grid is None:
                 seed = random.randint(0, 9999)
-                self.maze_env.rebuild_walls(seed=seed)  # Ensure new maze layout
-                obs, info = self.maze_env.reset(seed=0, phase=0)
+                wall_prob = random.uniform(0.1, 0.35)  # Random wall density for variability
+                self.maze_env.rebuild_walls(seed=seed, wall_prob=wall_prob)  # Ensure new maze layout
+                obs, info = self.maze_env.reset(seed=seed, phase=1)
                 self.maze_env.goal = None  # Clear goal to allow player placement
                 self.maze_grid = self.maze_env.render().splitlines()
 
