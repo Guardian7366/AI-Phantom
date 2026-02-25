@@ -15,6 +15,27 @@ from .logits_utils_extra import fix_all_neginf_rows
 from .model import CnnActorCritic
 
 
+def _move_optim_state_to_param_device_(optim: torch.optim.Optimizer) -> None:
+    """
+    Asegura que TODO tensor dentro del estado del optimizador esté en el mismo device
+    que su parámetro correspondiente. Evita crashes de Adam foreach (cuda vs cpu).
+
+    OJO: optim.state_dict() no tiene mapping directo a params, pero optim.state
+    sí está indexado por parámetro (Tensor/Parameter).
+    """
+    for group in optim.param_groups:
+        for p in group.get("params", []):
+            if p is None:
+                continue
+            st = optim.state.get(p, None)
+            if not st:
+                continue
+            pdev = p.device
+            for k, v in list(st.items()):
+                if torch.is_tensor(v) and v.device != pdev:
+                    st[k] = v.to(pdev, non_blocking=True)
+
+
 @dataclass
 class PPOConfig:
     rollout_len: int = 128
@@ -36,6 +57,9 @@ class PPOConfig:
     early_stop_kl_mult: float = 1.5
 
     enable_action_mask: bool = True
+
+    # Acción fallback si una fila queda degenerada (todas -inf / no finita)
+    fallback_action: int = 0
 
     # Protecciones numéricas
     abort_on_nan: bool = True
@@ -88,13 +112,22 @@ class PPOTrainer:
     - explained variance estable
     - LR/clip adaptativo por EMA(|KL|)
     - early-stop por KL (robusto a spikes)
+    - ✅ blindaje device mismatch optimizer (cuda vs cpu)
     """
 
     def __init__(self, model: CnnActorCritic, cfg: PPOConfig, device: torch.device):
         self.model = model.to(device)
         self.cfg = cfg
         self.device = device
-        self.optim = torch.optim.Adam(self.model.parameters(), lr=float(cfg.lr), eps=1e-5)
+
+        # ✅ foreach=False reduce rutas internas sensibles a mismatch
+        self.optim = torch.optim.Adam(
+            self.model.parameters(),
+            lr=float(cfg.lr),
+            eps=1e-5,
+            foreach=False,
+        )
+
         self.updates = 0
         self._kl_ema: Optional[float] = None
 
@@ -174,6 +207,7 @@ class PPOTrainer:
         ev_acc = 0.0
         ratio_sat_acc = 0.0
         all_neginf_pre_acc = 0.0
+        logp_mismatch_acc = 0.0
         n_batches = 0
 
         self.model.train()
@@ -182,25 +216,18 @@ class PPOTrainer:
 
         last_kl_ema = float(self._kl_ema) if (self._kl_ema is not None) else 0.0
 
-        def _provisional_ema(prev_ema: float, x: float) -> float:
-            beta = float(self.cfg.kl_ema_beta)
-            if (self._kl_ema is None) and (prev_ema == 0.0):
-                return float(x)
-            return float(beta * float(prev_ema) + (1.0 - beta) * float(x))
-
-
         for _epoch in range(int(self.cfg.ppo_epochs)):
+            kl_over_count = 0
             for batch in buffer.iter_minibatches(self.cfg.minibatch_size, shuffle=True):
                 # -------------------------------------------------
-                # ✅ Input sanity: SOLO batch.* (aquí aún no existen logits/value)
+                # ✅ Input sanity: SOLO batch.*
                 # -------------------------------------------------
                 if bool(self.cfg.abort_on_nan):
-                    # logp_old puede tener -inf (masking), PERO no NaN ni +inf
+                    # logp_old puede tener -inf (mask), pero no NaN ni +inf
                     if torch.isnan(batch.logp_old).any() or torch.isposinf(batch.logp_old).any():
                         nan_abort = True
                         break
 
-                    # values_old/returns/advantages deben ser finitos
                     if not torch.isfinite(batch.values_old).all():
                         nan_abort = True
                         break
@@ -210,7 +237,12 @@ class PPOTrainer:
                 else:
                     batch.advantages = torch.nan_to_num(batch.advantages, nan=0.0, posinf=0.0, neginf=0.0)
                     batch.returns = torch.nan_to_num(batch.returns, nan=0.0, posinf=0.0, neginf=0.0)
-                    batch.logp_old = torch.nan_to_num(batch.logp_old, nan=0.0, posinf=0.0, neginf=0.0)
+                    
+                    # ✅ Mantener -inf (mask) en logp_old incluso si abort_on_nan=False
+                    logp_old_raw = batch.logp_old
+                    batch.logp_old = torch.nan_to_num(logp_old_raw, nan=0.0, posinf=0.0)
+                    batch.logp_old = torch.where(torch.isneginf(logp_old_raw), logp_old_raw, batch.logp_old)
+
                     batch.values_old = torch.nan_to_num(batch.values_old, nan=0.0, posinf=0.0, neginf=0.0)
 
                 # -------------------------------------------------
@@ -219,23 +251,28 @@ class PPOTrainer:
                 logits, value = self.model(batch.obs)
 
                 # Action masking + saneamiento
-                logits = mask_invalid_actions(batch.obs, logits, enable=bool(self.cfg.enable_action_mask))
+                logits = mask_invalid_actions(
+                    batch.obs,
+                    logits,
+                    enable=bool(self.cfg.enable_action_mask),
+                    fallback_action=int(self.cfg.fallback_action),
+                )
 
                 with torch.no_grad():
                     all_neginf_pre_acc += torch.isneginf(logits).all(dim=-1).float().mean().item()
 
                 logits = sanitize_logits_keep_neginf(logits, nan_repl=float(self.cfg.nan_logits_replacement))
-                logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=0)
+                logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=int(self.cfg.fallback_action))
 
                 # value -> [B]
                 if value.dim() == 2 and value.size(-1) == 1:
                     value = value.squeeze(-1)
 
                 # -------------------------------------------------
-                # ✅ Post-sanitize sanity: permitir -inf en logits; abortar solo por NaN o +inf
+                # ✅ Post-sanitize sanity (permitir -inf en logits; abortar solo por NaN/+inf)
                 # -------------------------------------------------
                 if bool(self.cfg.abort_on_nan):
-                    if (not torch.isfinite(value).all()):
+                    if not torch.isfinite(value).all():
                         nan_abort = True
                         break
                     if torch.isnan(logits).any() or torch.isposinf(logits).any():
@@ -243,11 +280,10 @@ class PPOTrainer:
                         break
 
                 dist = Categorical(logits=logits)
-
                 logp = dist.log_prob(batch.actions)
                 entropy = dist.entropy().mean()
 
-                # ✅ Sanear logp_old: permitir -inf, pero si hay NaN/+inf lo corregimos a logp actual (ratio=1)
+                # ✅ Sanear logp_old: permitir -inf; si hay NaN/+inf => reemplazar por logp actual (ratio=1)
                 logp_old = batch.logp_old
                 if bool(self.cfg.abort_on_nan):
                     bad = torch.isnan(logp_old) | torch.isposinf(logp_old)
@@ -258,16 +294,27 @@ class PPOTrainer:
 
                 clip = float(self.cfg.clip_range)
 
-                # --- logp diff robusto: evita (-inf) - (-inf) => NaN ---
-                # si ambos son -inf, interpretamos diff=0 (ratio=1) porque ambas probas eran 0 por máscara
+                # -------------------------------------------------
+                # logp diff robusto:
+                # - finito/finito => normal
+                # - -inf/-inf => 0 (ratio=1)
+                # - mismatch (-inf vs finito) => 0 y anulamos adv (no update)
+                # -------------------------------------------------
                 both_neginf = torch.isneginf(logp) & torch.isneginf(logp_old)
                 finite_pair = torch.isfinite(logp) & torch.isfinite(logp_old)
+
+                mismatch_old_zero = torch.isneginf(logp_old) & torch.isfinite(logp)
+                mismatch_new_zero = torch.isneginf(logp) & torch.isfinite(logp_old)
+                mismatch_mask = mismatch_old_zero | mismatch_new_zero
 
                 logp_diff = torch.zeros_like(logp)
                 logp_diff = torch.where(finite_pair, (logp - logp_old), logp_diff)
                 logp_diff = torch.where(both_neginf, torch.zeros_like(logp_diff), logp_diff)
+                logp_diff = torch.where(mismatch_mask, torch.zeros_like(logp_diff), logp_diff)
 
-                # si hay NaN restante, es un bug real
+                with torch.no_grad():
+                    logp_mismatch_acc += float(mismatch_mask.float().mean().item())
+
                 if bool(self.cfg.abort_on_nan) and torch.isnan(logp_diff).any():
                     nan_abort = True
                     break
@@ -281,9 +328,11 @@ class PPOTrainer:
                 ).clamp(0.0, float(self.cfg.ratio_clip_max))
 
                 with torch.no_grad():
-                    ratio_sat = ((ratio >= float(self.cfg.ratio_clip_max) - 1e-12).float().mean())
+                    ratio_sat = (ratio >= (float(self.cfg.ratio_clip_max) - 1e-12)).float().mean()
 
                 adv = batch.advantages
+                adv = torch.where(mismatch_mask, torch.zeros_like(adv), adv)
+
                 if float(self.cfg.adv_clip) > 0.0:
                     adv = adv.clamp(-float(self.cfg.adv_clip), float(self.cfg.adv_clip))
 
@@ -303,8 +352,8 @@ class PPOTrainer:
                 loss = pi_loss + vf_coef * vf_loss - ent_coef * entropy
 
                 # -------------------------------------------------
-                # ✅ BC loss solo en pasos teacher (si existen)
-                #    + NO aplicar si el minibatch está muy teacher-heavy
+                # ✅ BC loss solo en teacher steps
+                #    + NO aplicar si el minibatch es teacher-heavy
                 # -------------------------------------------------
                 bc_loss = torch.tensor(0.0, device=self.device)
 
@@ -315,22 +364,24 @@ class PPOTrainer:
                 bc_allowed = teacher_frac <= float(self.cfg.bc_teacher_frac_max)
 
                 if bc_allowed and hasattr(batch, "is_teacher") and (batch.is_teacher is not None):
-                    mask = (batch.is_teacher > 0.5)
-
-                    if bool(mask.any()):
+                    tmask = (batch.is_teacher > 0.5)
+                    if bool(tmask.any()):
                         t = min(1.0, float(self.updates - 1) / float(max(1, self.cfg.bc_decay_updates)))
                         bc_coef = (1.0 - t) * float(self.cfg.bc_coef) + t * float(self.cfg.bc_coef_end)
 
-                        logits_t = logits[mask]
-                        acts_t = batch.actions[mask]
+                        logits_t = logits[tmask]
+                        acts_t = batch.actions[tmask]
 
+                        # Solo si la acción teacher tiene logit finito
                         target_logits = logits_t.gather(1, acts_t.view(-1, 1)).squeeze(1)
                         good_t = torch.isfinite(target_logits)
 
                         if bool(good_t.any()):
                             logits_ce = logits_t[good_t]
-                            logits_ce = sanitize_logits_keep_neginf(logits_ce, nan_repl=float(self.cfg.nan_logits_replacement))
-                            logits_ce = fix_all_neginf_rows(logits_ce, fill=0.0, fallback_action=0)
+                            logits_ce = sanitize_logits_keep_neginf(
+                                logits_ce, nan_repl=float(self.cfg.nan_logits_replacement)
+                            )
+                            logits_ce = fix_all_neginf_rows(logits_ce, fill=0.0, fallback_action=int(self.cfg.fallback_action))
                             bc_loss = F.cross_entropy(logits_ce, acts_t[good_t])
                             loss = loss + float(bc_coef) * bc_loss
 
@@ -338,22 +389,28 @@ class PPOTrainer:
                     nan_abort = True
                     break
 
+                # -------------------------------------------------
+                # Backprop + step
+                # -------------------------------------------------
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_gn)
+
+                # ✅ BLINDAJE: evita estado Adam en CPU mezclado con params/grads en CUDA
+                _move_optim_state_to_param_device_(self.optim)
+
                 self.optim.step()
 
+                # -------------------------------------------------
+                # Metrics
+                # -------------------------------------------------
                 with torch.no_grad():
-                    # ✅ KL robusto: usa logp_old SANITIZADO (el mismo que ratio)
-                    logp_old_k = logp_old
-
-                    finite_mask = torch.isfinite(logp_old_k) & torch.isfinite(logp)
+                    finite_mask = torch.isfinite(logp_old) & torch.isfinite(logp)
                     if finite_mask.any():
-                        approx_kl_signed = (logp_old_k[finite_mask] - logp[finite_mask]).mean()
+                        approx_kl_signed = (logp_old[finite_mask] - logp[finite_mask]).mean()
                         approx_kl_mag = approx_kl_signed.abs()
                         cur_kl_mag = float(approx_kl_mag.item())
                     else:
-                        # si todo está raro, no castigamos (KL ~ 0)
                         approx_kl_signed = torch.tensor(0.0, device=logp.device)
                         approx_kl_mag = approx_kl_signed.abs()
                         cur_kl_mag = 0.0
@@ -371,15 +428,21 @@ class PPOTrainer:
                 ratio_sat_acc += float(ratio_sat.item())
                 n_batches += 1
 
+                # Early stop por KL (robusto): 2 minibatches seguidos sobre umbral
                 if target_kl > 0.0:
                     thr = target_kl * float(self.cfg.early_stop_kl_mult)
-                    # early stop robusto: EMA + KL actual deben estar altos
-                    if (float(last_kl_ema) > thr) and (cur_kl_mag > thr):
+                    if cur_kl_mag > thr:
+                        kl_over_count += 1
+                    else:
+                        kl_over_count = 0
+
+                    if kl_over_count >= 2:
                         early_stop = True
                         break
 
-            # ✅ Adapt LR/clip una vez por epoch
-            self._adaptive_step(last_kl_ema)
+            # ✅ Adapt LR/clip una vez por epoch (solo si no hubo abort)
+            if not nan_abort:
+                self._adaptive_step(last_kl_ema)
 
             if nan_abort or early_stop:
                 break
@@ -400,6 +463,7 @@ class PPOTrainer:
                 "bc_loss": 0.0,
                 "ratio_sat": 0.0,
                 "all_neginf_pre": 0.0,
+                "logp_mismatch": 0.0,
             }
 
         return {
@@ -417,4 +481,5 @@ class PPOTrainer:
             "bc_loss": bc_loss_acc / n_batches,
             "ratio_sat": ratio_sat_acc / n_batches,
             "all_neginf_pre": all_neginf_pre_acc / n_batches,
+            "logp_mismatch": logp_mismatch_acc / n_batches,
         }

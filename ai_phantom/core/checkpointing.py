@@ -9,10 +9,13 @@ import torch
 
 
 def _to_cpu_rng_tensor(x: Any) -> Any:
-    # Asegura tensores RNG en CPU y dtype=uint8 (ByteTensor) para compatibilidad con torch.set_rng_state
+    """
+    Asegura tensores RNG en CPU y dtype=uint8 (ByteTensor) para compatibilidad con torch.set_rng_state.
+    """
     if torch.is_tensor(x):
-        return x.detach().to(device="cpu", dtype=torch.uint8).clone()
+        return x.detach().to(device="cpu", dtype=torch.uint8).contiguous().clone()
     return x
+
 
 def _ensure_uint8_cpu_tensor(x: Any) -> Optional[torch.Tensor]:
     """
@@ -20,7 +23,7 @@ def _ensure_uint8_cpu_tensor(x: Any) -> Optional[torch.Tensor]:
     Soporta:
       - torch.Tensor (cualquier dtype/device)
       - bytes/bytearray
-      - list/tuple de ints
+      - list/tuple de ints (0..255)
       - numpy arrays
     """
     if x is None:
@@ -31,21 +34,22 @@ def _ensure_uint8_cpu_tensor(x: Any) -> Optional[torch.Tensor]:
             return x.detach().to(device="cpu", dtype=torch.uint8).contiguous()
 
         if isinstance(x, (bytes, bytearray)):
-            # torch.tensor(list(bytes)) es seguro y estable
             return torch.tensor(list(x), dtype=torch.uint8, device="cpu").contiguous()
 
         if isinstance(x, (list, tuple)):
+            # lista de ints/uint8
             return torch.tensor(x, dtype=torch.uint8, device="cpu").contiguous()
 
         if isinstance(x, np.ndarray):
-            # Fuerza uint8 y copia segura a CPU tensor
             arr = x.astype(np.uint8, copy=False)
+            # from_numpy comparte memoria; contiguous() asegura layout estable
             return torch.from_numpy(arr).to(device="cpu", dtype=torch.uint8).contiguous()
 
     except Exception:
         return None
 
     return None
+
 
 def _get_rng_state() -> Dict[str, Any]:
     state: Dict[str, Any] = {
@@ -57,7 +61,6 @@ def _get_rng_state() -> Dict[str, Any]:
     if torch.cuda.is_available():
         try:
             cuda_states = torch.cuda.get_rng_state_all()
-            # guardar lista de tensores en CPU
             state["torch_cuda_all"] = [_to_cpu_rng_tensor(s) for s in cuda_states]
         except Exception as e:
             print(f"⚠️ CUDA RNG capture skipped: {e}")
@@ -67,7 +70,14 @@ def _get_rng_state() -> Dict[str, Any]:
 
     return state
 
+
 def _set_rng_state(state: Dict[str, Any]) -> None:
+    """
+    Restauración RNG robusta:
+    - CPU torch: siempre intenta si es convertible a ByteTensor CPU.
+    - CUDA: SOLO restaura si viene como list/tuple de estados y len == device_count().
+      Cualquier otro formato se ignora (para evitar restores inválidos).
+    """
     if not state:
         return
 
@@ -87,21 +97,43 @@ def _set_rng_state(state: Dict[str, Any]) -> None:
 
         cuda_all = state.get("torch_cuda_all", None)
         if torch.cuda.is_available() and (cuda_all is not None):
-            # compat: puede venir como tensor único o lista/tupla
-            if torch.is_tensor(cuda_all) or isinstance(cuda_all, (bytes, bytearray, list, tuple, np.ndarray)):
-                if torch.is_tensor(cuda_all):
-                    fixed_list = [_ensure_uint8_cpu_tensor(cuda_all)]
-                elif isinstance(cuda_all, (bytes, bytearray, np.ndarray)):
-                    fixed_list = [_ensure_uint8_cpu_tensor(cuda_all)]
-                else:
-                    fixed_list = [_ensure_uint8_cpu_tensor(s) for s in cuda_all]  # type: ignore[arg-type]
-
+            # ✅ Solo aceptamos lista/tupla de estados CUDA
+            if isinstance(cuda_all, (list, tuple)):
+                fixed_list = [_ensure_uint8_cpu_tensor(s) for s in cuda_all]  # type: ignore[arg-type]
                 fixed = [t for t in fixed_list if t is not None]
-                if len(fixed) > 0:
+
+                ndev = int(torch.cuda.device_count())
+                if len(fixed) == ndev:
                     torch.cuda.set_rng_state_all(fixed)
+                else:
+                    print(f"⚠️ CUDA RNG restore skipped (len={len(fixed)} != device_count={ndev}).")
+            else:
+                # tensor único/bytes/ndarray/etc => formato no confiable para set_rng_state_all
+                print("⚠️ CUDA RNG restore skipped (unexpected format; expected list/tuple of per-device states).")
 
     except Exception as e:
         print(f"⚠️ RNG restore skipped (incompatible state): {e}")
+
+
+def _optimizer_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
+    """
+    Mueve el estado del optimizador al device del modelo.
+    Útil cuando se carga un checkpoint guardado en CPU y luego se entrena en CUDA.
+    """
+    def move(x: Any) -> Any:
+        if torch.is_tensor(x):
+            # non_blocking ayuda si el tensor fuente está en pinned mem / staging
+            return x.to(device=device, non_blocking=True)
+        if isinstance(x, dict):
+            return {k: move(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            y = [move(v) for v in x]
+            return type(x)(y)  # conserva list/tuple
+        return x
+
+    for st in optimizer.state.values():
+        for k, v in list(st.items()):
+            st[k] = move(v)
 
 
 def save_checkpoint(
@@ -115,23 +147,25 @@ def save_checkpoint(
     payload: Dict[str, Any] = {"model_state": model.state_dict()}
 
     if optimizer is not None:
-        payload["optim_state"] = optimizer.state_dict()
-        # ✅ Asegura que el estado del optimizador quede en el mismo device que el modelo
+        # ✅ Guardar optim_state en CPU SIN mutar el optimizador vivo
+        optim_state = optimizer.state_dict()
         try:
-            model_device = next(model.parameters()).device
-            for st in optimizer.state.values():
+            for st in optim_state.get("state", {}).values():
                 for k, v in list(st.items()):
                     if torch.is_tensor(v):
-                        st[k] = v.to(device=model_device)
+                        st[k] = v.detach().to(device="cpu").contiguous()
         except Exception as e:
-            print(f"⚠️ Optimizer state device move skipped: {e}")
+            print(f"⚠️ Optimizer state CPU copy skipped: {e}")
+
+        payload["optim_state"] = optim_state
 
     if extra is not None:
         payload["extra"] = extra
 
-    # ✅ D1: guardar RNG + meta para reproducibilidad
+    # ✅ reproducibilidad
     if save_rng:
         payload["rng_state"] = _get_rng_state()
+
     payload["meta"] = {
         "time_unix": float(time.time()),
         "torch_version": torch.__version__,
@@ -139,10 +173,8 @@ def save_checkpoint(
         "cuda_version": getattr(torch.version, "cuda", None),
     }
 
-    # ✅ asegurar que el directorio existe
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-    # ✅ guardado atómico (anti corrupción)
     tmp = f"{path}.tmp"
     torch.save(payload, tmp)
     os.replace(tmp, path)
@@ -165,8 +197,12 @@ def load_checkpoint(
 
     if optimizer is not None and "optim_state" in payload:
         optimizer.load_state_dict(payload["optim_state"])
+        try:
+            model_device = next(model.parameters()).device
+            _optimizer_to_device(optimizer, model_device)
+        except Exception as e:
+            print(f"⚠️ Optimizer state device move skipped after load: {e}")
 
-    # ✅ D1: opcional restaurar RNG
     if restore_rng and ("rng_state" in payload):
         _set_rng_state(payload["rng_state"])
 

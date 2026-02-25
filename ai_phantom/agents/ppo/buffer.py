@@ -45,12 +45,14 @@ class RolloutBuffer:
 
         # Buffers en CPU (pinned si aplica)
         self.obs = torch.zeros((self.T, c, h, w), dtype=torch.float32, pin_memory=self.pin_memory)
+        
         self.actions = torch.zeros((self.T,), dtype=torch.int64, pin_memory=self.pin_memory)
         self.rewards = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
         self.dones = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
         self.values = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
         self.logps = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
         self.is_teacher = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
+
         self.advantages = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
         self.returns = torch.zeros((self.T,), dtype=torch.float32, pin_memory=self.pin_memory)
 
@@ -82,11 +84,26 @@ class RolloutBuffer:
 
         # PRO: from_numpy evita copias extra y es más consistente aquí
         self.obs[self.ptr].copy_(torch.from_numpy(obs))
+
         self.actions[self.ptr] = int(action)
-        self.rewards[self.ptr] = float(reward)
+
+        r = float(reward)
+        v = float(value)
+        lp = float(logp)
+
+        # ✅ Blindaje numérico “no empeorar”
+        if not np.isfinite(r):
+            r = 0.0
+        if not np.isfinite(v):
+            v = 0.0
+        # logp puede ser -inf por masking, pero NO NaN/+inf
+        if (not np.isfinite(lp)) and (not np.isneginf(lp)):
+            lp = 0.0
+
+        self.rewards[self.ptr] = r
         self.dones[self.ptr] = 1.0 if bool(done) else 0.0
-        self.values[self.ptr] = float(value)
-        self.logps[self.ptr] = float(logp)
+        self.values[self.ptr] = v
+        self.logps[self.ptr] = lp
         self.is_teacher[self.ptr] = 1.0 if bool(is_teacher) else 0.0
 
         self.ptr += 1
@@ -107,10 +124,15 @@ class RolloutBuffer:
         gamma = float(gamma)
         lam = float(gae_lambda)
 
+        # Blindaje: last_value puede llegar NaN/+inf en edge cases (no queremos propagar eso a GAE)
+        lv = float(last_value)
+        if not np.isfinite(lv):
+            lv = 0.0
+
         last_gae = 0.0
         # Si el rollout terminó en terminal, no bootstrapees
         next_nonterminal_last = 0.0 if bool(last_done) else 1.0
-        next_value_last = float(last_value)
+        next_value_last = lv
 
         for t in reversed(range(self.T)):
             if t == self.T - 1:
@@ -171,23 +193,26 @@ class RolloutBuffer:
         if mb <= 0 or mb > self.T:
             raise ValueError(f"minibatch_size inválido: {mb}")
 
-        idx = np.arange(self.T)
         if shuffle:
-            np.random.shuffle(idx)
+            idx = torch.randperm(self.T, device="cpu")
+        else:
+            idx = torch.arange(self.T, device="cpu")
 
         for start in range(0, self.T, mb):
             end = min(start + mb, self.T)
             b = idx[start:end]
-            if b.size == 0:
+            if b.numel() == 0:
                 continue
+            b_np = b.numpy()
+
 
             # non_blocking funciona “de verdad” si pin_memory=True
             yield RolloutBatch(
-                obs=self.obs[b].to(self.device, non_blocking=True),
-                actions=self.actions[b].to(self.device, non_blocking=True),
-                logp_old=self.logps[b].to(self.device, non_blocking=True),
-                values_old=self.values[b].to(self.device, non_blocking=True),
-                returns=self.returns[b].to(self.device, non_blocking=True),
-                advantages=self.advantages[b].to(self.device, non_blocking=True),
-                is_teacher=self.is_teacher[b].to(self.device, non_blocking=True),
+                obs=self.obs[b_np].to(self.device, non_blocking=True),
+                actions=self.actions[b_np].to(self.device, non_blocking=True),
+                logp_old=self.logps[b_np].to(self.device, non_blocking=True),
+                values_old=self.values[b_np].to(self.device, non_blocking=True),
+                returns=self.returns[b_np].to(self.device, non_blocking=True),
+                advantages=self.advantages[b_np].to(self.device, non_blocking=True),
+                is_teacher=self.is_teacher[b_np].to(self.device, non_blocking=True),
             )

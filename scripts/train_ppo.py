@@ -95,7 +95,12 @@ def main() -> None:
     dummy = torch.zeros((1, *obs_shape), device=device, dtype=torch.float32)
     trainer.model = safe_torch_compile(trainer.model, device=device, example_input=dummy)
 
-    policy = Policy(model=trainer.model, enable_action_mask=True)
+    policy = Policy(
+    model=trainer.model,
+    enable_action_mask=True,
+    nan_repl=float(ppo_cfg.nan_logits_replacement),
+    fallback_action=0,
+    )
 
     buffer = RolloutBuffer(
         rollout_len=ppo_cfg.rollout_len,

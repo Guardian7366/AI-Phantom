@@ -80,7 +80,7 @@ class TrainController:
 
             # ---- Rollout ----
             for _t in range(int(self.ppo_cfg.rollout_len)):
-                obs_t = torch.from_numpy(self.obs).unsqueeze(0).to(self.device).float()
+                obs_t = torch.from_numpy(self.obs).unsqueeze(0).to(self.device, non_blocking=True).float()
                 out = self.policy.act(obs_t, deterministic=False)
 
                 action = int(out.action.item())
@@ -114,7 +114,7 @@ class TrainController:
                 last_done = True
             else:
                 with torch.no_grad():
-                    obs_last = torch.from_numpy(self.obs).unsqueeze(0).to(self.device).float()
+                    obs_last = torch.from_numpy(self.obs).unsqueeze(0).to(self.device, non_blocking=True).float()
                     last_value = float(self.policy.value(obs_last).item())
                 last_done = False
 
@@ -164,6 +164,9 @@ class TrainController:
                         phase=int(self.cfg.phase),
                         seed_base=20_000,
                         deterministic=False,
+                        rebuild_walls_each_episode=use_walls,
+                        walls_seed_base=777 + 190_000,  # distinto al det para evitar overlap
+                        wall_prob=wall_prob if use_walls else None,
                     )
                 )
                 print(

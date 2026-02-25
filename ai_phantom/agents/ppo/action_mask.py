@@ -7,6 +7,7 @@ def mask_invalid_actions(
     obs: torch.Tensor,
     logits: torch.Tensor,
     enable: bool = True,
+    fallback_action: int = 0,
 ) -> torch.Tensor:
     if (not enable) or (obs.dim() != 4) or (logits.dim() != 2):
         return logits
@@ -14,6 +15,12 @@ def mask_invalid_actions(
     B, C, H, W = obs.shape
     if C < 2 or logits.size(-1) != 4:
         return logits
+    
+    fa = int(fallback_action)
+    if fa < 0:
+        fa = 0
+    if fa >= logits.size(-1):
+        fa = logits.size(-1) - 1
 
     walls = obs[:, 0]   # [B,H,W]
     agent = obs[:, 1]   # [B,H,W]
@@ -21,8 +28,11 @@ def mask_invalid_actions(
     with torch.no_grad():
         agent_sum = agent.flatten(1).sum(dim=1)   # [B]
         good = agent_sum > 0.5                    # [B]
-        if not bool(good.any()):
-            return logits  # todas malas -> no hacemos nada
+        if not good.any().item():
+            valid = torch.zeros((B, 4), device=obs.device, dtype=torch.bool)
+            valid[:, fa] = True
+            return logits.masked_fill(~valid, float("-inf"))
+        agent = torch.where(good.view(B, 1, 1), agent, torch.zeros_like(agent))
 
         flat_idx = agent.flatten(1).argmax(dim=1)  # [B]
         ar = (flat_idx // W).to(torch.long)
@@ -47,9 +57,12 @@ def mask_invalid_actions(
         any_valid = valid.any(dim=1)  # [B]
         bad_good = good & (~any_valid)
 
-        if bool(bad_good.any()):
-            fallback = torch.zeros_like(valid)
-            fallback[:, 0] = True  # acción 0 como default (determinista)
-            valid = torch.where(bad_good.unsqueeze(1), fallback, valid)
+        if bad_good.any().item():
+            valid = valid.clone()
+            valid[bad_good] = False
+            valid[bad_good, fa] = True
 
+    valid = valid.to(torch.bool)
+    if bool(valid.all().item()):
+        return logits
     return logits.masked_fill(~valid, float("-inf"))

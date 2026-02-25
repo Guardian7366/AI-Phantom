@@ -30,6 +30,14 @@ from ai_phantom.agents.ppo.action_mask import mask_invalid_actions
 from ai_phantom.agents.ppo.logits_utils import sanitize_logits_keep_neginf
 from ai_phantom.agents.ppo.logits_utils_extra import fix_all_neginf_rows
 
+# ------------------------------
+# Auto-stop cuando PPO llega a SR objetivo en TEST_FINAL
+# ------------------------------
+STOP_ON_PPO_SR = True
+STOP_PPO_SR = 0.95
+STOP_PPO_STREAK_N = 2          # evaluaciones seguidas requeridas
+STOP_SAVE_PATH = "results/checkpoints/final_phase1.pt"
+
 def linear_schedule(start: float, end: float, t: float) -> float:
     t = float(max(0.0, min(1.0, t)))
     return (1.0 - t) * float(start) + t * float(end)
@@ -39,6 +47,11 @@ def lerp(a: float, b: float, t: float) -> float:
     t = float(max(0.0, min(1.0, t)))
     return (1.0 - t) * float(a) + t * float(b)
 
+def move_optimizer_state_to_device_(optim: torch.optim.Optimizer, device: torch.device) -> None:
+    for state in optim.state.values():
+        for k, v in state.items():
+            if torch.is_tensor(v):
+                state[k] = v.to(device, non_blocking=True)
 
 def wall_prob_for_stage(stage: int, num_stages: int, p0: float, p1: float) -> float:
     if num_stages <= 1:
@@ -113,15 +126,19 @@ def no_progress_by_distmap(env: MazeEnv, action: int) -> bool:
         return False
     return d1 >= d0
 
-def _ensure_valid_logits_for_categorical(logits: torch.Tensor) -> torch.Tensor:
+def _ensure_valid_logits_for_categorical(
+        logits: torch.Tensor,
+        nan_repl: float = 0.0,
+        fallback_action: int = 0,
+    ) -> torch.Tensor:
     """
     Unifica la protección numérica con Trainer/Policy:
     - preserva -inf (mask)
-    - corrige NaN/+inf
-    - rescata filas degeneradas (todas -inf / sin finitos) con fallback_action
+    - corrige NaN/+inf usando nan_repl
+    - rescata filas degeneradas con fallback_action
     """
-    logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
-    logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=0)
+    logits = sanitize_logits_keep_neginf(logits, nan_repl=float(nan_repl))
+    logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=int(fallback_action))
     return logits
 
 
@@ -133,8 +150,19 @@ def policy_logp_of_action(
     enable_mask: bool = True,
 ) -> float:
     logits, _v = trainer.model(obs_t)
-    logits = mask_invalid_actions(obs_t, logits, enable=bool(enable_mask))
-    logits = _ensure_valid_logits_for_categorical(logits)
+
+    logits = mask_invalid_actions(
+    obs_t,
+    logits,
+    enable=bool(enable_mask),
+    fallback_action=int(trainer.cfg.fallback_action),
+    )
+
+    logits = _ensure_valid_logits_for_categorical(
+        logits,
+        nan_repl=float(trainer.cfg.nan_logits_replacement),
+        fallback_action=int(trainer.cfg.fallback_action),
+    )
 
     dist = torch.distributions.Categorical(logits=logits)
     a_t = torch.tensor([int(action)], device=obs_t.device, dtype=torch.long)
@@ -303,10 +331,19 @@ def main() -> None:
 
     trainer = PPOTrainer(model=model, cfg=ppo_cfg, device=device)
 
+    # ✅ Guardar techos base (evita que caps temporales se queden pegados)
+    lr_max_base = float(ppo_cfg.lr_max)
+    clip_max_base = float(ppo_cfg.clip_max)
+
     dummy = torch.zeros((1, *obs_shape), device=device, dtype=torch.float32)
     trainer.model = safe_torch_compile(trainer.model, device=device, example_input=dummy)
 
-    policy = Policy(model=trainer.model, enable_action_mask=True)
+    policy = Policy(
+        model=trainer.model,
+        enable_action_mask=True,
+        nan_repl=float(ppo_cfg.nan_logits_replacement),
+        fallback_action=0,
+    )
 
     # Safety: re-check horizon once (no cost, prevents silent drift)
     sync_horizon([train_env, eval_env], ppo_cfg.rollout_len, name="Phase1(SAFETY)")
@@ -334,6 +371,8 @@ def main() -> None:
         )
         print(f"Loaded warm-start checkpoint: {ckpt0}")
 
+    best_path = "results/checkpoints/best_phase1.pt"  # ✅ siempre definido
+
     bc_ckpt = "results/checkpoints/bc_phase1.pt"
     has_bc = os.path.exists(bc_ckpt)
     if has_bc:
@@ -346,7 +385,79 @@ def main() -> None:
         )
         print(f"Loaded BC warm-start checkpoint: {bc_ckpt}")
 
-    best_path = "results/checkpoints/best_phase1.pt"
+        best_path = "results/checkpoints/best_phase1.pt"
+
+    # ------------------------------
+    # Eval sizes (FAST vs TEST)
+    # (deben existir antes de EVAL-ONLY)
+    # ------------------------------
+    eval_eps_val_fast = 90
+    eval_eps_test_final = 140
+
+    # ------------------------------
+    # ✅ EVAL-ONLY (no entrenar): verifica BEST actual
+    # ------------------------------
+    if os.getenv("AI_PHANTOM_EVAL_ONLY", "0").strip() == "1":
+        if os.path.exists(best_path):
+            print(f"🧪 EVAL-ONLY loading: {best_path}")
+            load_checkpoint(
+                best_path,
+                model=trainer.model,
+                optimizer=None,
+                map_location=device,
+                restore_rng=False,
+            )
+
+        # Test final PPO puro (oficial)
+        test_ppo = evaluator.evaluate(
+            EvalConfig(
+                episodes=int(eval_eps_test_final),
+                phase=1,
+                seed_base=71_000,
+                deterministic=True,
+                rebuild_walls_each_episode=True,
+                walls_seed_base=WALLS_SEED + 900_000,
+                wall_prob=float(wall_p_final),
+                hybrid=False,
+            )
+        )
+
+        # Hybrid A
+        test_h = evaluator.evaluate(
+            EvalConfig(
+                episodes=int(eval_eps_test_final),
+                phase=1,
+                seed_base=71_000,
+                deterministic=True,
+                rebuild_walls_each_episode=True,
+                walls_seed_base=WALLS_SEED + 900_000,
+                wall_prob=float(wall_p_final),
+                hybrid=True,
+                hybrid_min_conf=0.55,
+            )
+        )
+
+        # Hybrid B
+        test_b_h = evaluator.evaluate(
+            EvalConfig(
+                episodes=int(eval_eps_test_final),
+                phase=1,
+                seed_base=81_000,
+                deterministic=True,
+                rebuild_walls_each_episode=True,
+                walls_seed_base=WALLS_SEED + 950_000,
+                wall_prob=float(wall_p_final),
+                hybrid=True,
+                hybrid_min_conf=0.55,
+            )
+        )
+
+        print(
+            f"✅ EVAL-ONLY RESULTS | PPO SR={test_ppo['sr']:.3f} avg_steps={test_ppo['avg_steps']:.1f} | "
+            f"HYBRID_A SR={test_h['sr']:.3f} bfs_rate={test_h.get('bfs_rate', 0.0):.3f} | "
+            f"HYBRID_B SR={test_b_h['sr']:.3f} bfs_rate={test_b_h.get('bfs_rate', 0.0):.3f}"
+        )
+        return
 
     # ✅ Sprint 2 (C): límites para que el teacher nunca domine
     teacher_mix_max = 0.12
@@ -372,6 +483,13 @@ def main() -> None:
             map_location=device,
             restore_rng=True,  # ✅ restaurar RNG
         )
+        move_optimizer_state_to_device_(trainer.optim, device)
+
+        episodes = int(extra.get("episodes", episodes))
+        successes = int(extra.get("successes", 0))
+        steps_total = int(extra.get("steps_total", 0))
+        rescue_used_total = int(extra.get("rescue_used_total", 0))
+        episode_wall_counter = int(extra.get("episode_wall_counter", 0))
 
         # --- Restaurar curriculum ---
         cur_stage = int(extra.get("cur_stage", 0))
@@ -390,6 +508,8 @@ def main() -> None:
         # --- Restaurar finisher floors ---
         ent_floor = float(extra.get("ent_floor", ent_floor))
         target_kl_floor = float(extra.get("target_kl_floor", target_kl_floor))
+        # ✅ Safety: nunca permitir un target_kl_floor demasiado bajo por herencia de checkpoints viejos
+        target_kl_floor = max(0.020, float(target_kl_floor))
         clip_floor = float(extra.get("clip_floor", clip_floor))
 
         trainer.cfg.early_stop_kl_mult = float(
@@ -404,7 +524,7 @@ def main() -> None:
         )
 
         # --- Rebuild walls según stage ---
-        episode_wall_counter = 0
+        episode_wall_counter = int(extra.get("episode_wall_counter", 0))
         train_env.rebuild_walls(
             seed=WALLS_SEED + 1000 * cur_stage + episode_wall_counter,
             wall_prob=cur_wall_prob,
@@ -434,6 +554,9 @@ def main() -> None:
     test_drop_enable = True
     test_drop_margin = 0.08
     test_drop_boost_updates = 30
+
+    # ✅ Auto-stop streak: cuántas evaluaciones seguidas alcanzamos el SR objetivo
+    stop_sr_streak = 0
 
     # ✅ Anti-promoción insegura
     stage_promote_requires_test = True
@@ -521,12 +644,15 @@ def main() -> None:
     # ------------------------------
     # Runtime stats
     # ------------------------------
-    successes = 0
+    if not resumed:
+        successes = 0
+        episodes = 0
+        steps_total = 0
+        rescue_used_total = 0
+        episode_wall_counter = 0
+
     recent = deque(maxlen=200)
     recent_clean = deque(maxlen=200)
-
-    # wall seed por episodio
-    episode_wall_counter = 0
 
     if not resumed:
         cur_stage = 0
@@ -566,26 +692,13 @@ def main() -> None:
         for upd in range(1, int(total_updates) + 1):
             buffer.reset()
 
-            # schedules (no gate)
-            prog = (upd - 1) / max(1, (total_updates - 1))
-            train_env.cfg.min_manhattan = int(round(linear_schedule(mh_start, mh_end, prog)))
-
-            ent_scheduled = linear_schedule(ent_start, ent_end, prog)
-            trainer.cfg.ent_coef = max(float(ent_floor), float(ent_scheduled))
-
-            # ✅ Asegura que el finisher SÍ se aplica
-            trainer.cfg.target_kl = float(target_kl_floor)
-
-            # clip_floor = mínimo, pero no dejarlo “re-expandirse” demasiado
-            trainer.cfg.clip_range = max(float(clip_floor), float(trainer.cfg.clip_range))
-            trainer._set_clip_clamped(trainer.cfg.clip_range)
-
-            # ✅ Finisher: congelar adaptive KL (no permitir clip/LR subir)
-            trainer.cfg.adaptive_kl = False if finisher_on else True
-
-            # --- Safety caps: si estamos bloqueados por TEST o venimos de drops,
-            # evitamos que LR/clip vuelvan al techo y provoquen colapsos.
+            # --- Safety caps flags / temporales (DEBEN ir arriba) ---
             recent_drop_now = (test_drop_streak >= 1)
+            mismatch_ent_floor_eff = None
+
+            # ✅ Reset techos base al INICIO del update (evita que boosts/caps se queden pegados)
+            trainer.cfg.lr_max = float(lr_max_base)
+            trainer.cfg.clip_max = float(clip_max_base)
 
             # ✅ Solo caps duros si hay DROP real (anti-regresión)
             if recent_drop_now:
@@ -596,12 +709,27 @@ def main() -> None:
                 trainer.cfg.clip_range = min(float(trainer.cfg.clip_range), float(trainer.cfg.clip_max))
                 trainer._set_clip_clamped(trainer.cfg.clip_range)
 
-            # ✅ Boost controlado si estamos en mismatch (gate pasa pero PPO test no llega)
             if mismatch_boost_updates > 0 and (not recent_drop_now):
-                # subir exploración y permitir un poco más de LR (sin tocar clip)
-                ent_floor = max(float(ent_floor), float(mismatch_ent_floor))
-                trainer.cfg.lr_max = max(float(trainer.cfg.lr_max), float(mismatch_lr_max))
+                mismatch_ent_floor_eff = float(mismatch_ent_floor)
                 mismatch_boost_updates -= 1
+
+            # schedules (no gate)
+            prog = (upd - 1) / max(1, (total_updates - 1))
+            train_env.cfg.min_manhattan = int(round(linear_schedule(mh_start, mh_end, prog)))
+            ent_scheduled = linear_schedule(ent_start, ent_end, prog)
+
+            eff_floor = float(ent_floor)
+            if mismatch_ent_floor_eff is not None:
+                eff_floor = max(eff_floor, float(mismatch_ent_floor_eff))
+            trainer.cfg.ent_coef = max(eff_floor, float(ent_scheduled))
+
+            # ✅ Asegura que el finisher SÍ se aplica
+            trainer.cfg.target_kl = max(0.020, float(target_kl_floor))
+
+            trainer.cfg.clip_range = max(float(clip_floor), float(trainer.cfg.clip_range))
+            trainer._set_clip_clamped(trainer.cfg.clip_range)
+
+            trainer.cfg.adaptive_kl = False if finisher_on else True
 
             # ------------------------------
             # ✅ Anti-loop schedule por stage (evita colapsos temprano)
@@ -889,7 +1017,7 @@ def main() -> None:
             else:
                 with torch.no_grad():
                     obs_last = torch.from_numpy(obs).unsqueeze(0).to(device).float()
-                    last_value = float(policy.value(obs_last).item())
+                    last_value = float(policy.value(obs_last).item()) if hasattr(policy, "value") else policy_value(trainer, obs_last)
                 last_done = False
 
             buffer.compute_returns_and_advantages(
@@ -936,6 +1064,8 @@ def main() -> None:
                 f"lr={metrics.get('lr', trainer.optim.param_groups[0]['lr']):.2e} "
                 f"clip={metrics.get('clip', trainer.cfg.clip_range):.3f} "
                 f"kl_ema={metrics.get('kl_ema', 0.0):.5f} "
+                f"tKL={trainer.cfg.target_kl:.3f} esMult={trainer.cfg.early_stop_kl_mult:.2f} "
+                f"esThr={(trainer.cfg.target_kl * trainer.cfg.early_stop_kl_mult):.5f} "
                 f"entCoef={trainer.cfg.ent_coef:.5f} "
                 f"pi={metrics['pi_loss']:.4f} vf={metrics['vf_loss']:.4f} ev={metrics['explained_var']:.3f} "
                 f"ent={metrics['entropy']:.4f} |KL|={metrics['approx_kl']:.5f} stop={int(metrics['early_stop'])} "
@@ -989,6 +1119,7 @@ def main() -> None:
             # ------------------------------
             if upd % int(eval_every) == 0:
                 # ✅ Guardar estado RNG (anti-deriva por eval)
+                # ---- Save RNG (anti-deriva por eval) ----               
                 py_state = random.getstate()
                 np_state = np.random.get_state()
                 torch_state = torch.get_rng_state()
@@ -1060,8 +1191,15 @@ def main() -> None:
                     bad_gate_streak += 1
                     promote_hold = 0  # ✅ si no pasamos gate, no acumulamos paciencia de promoción
 
+                is_final_stage = (cur_stage >= (num_wall_stages - 1))
+
                 # ✅ Rollback por colapso prolongado
-                if rollback_enable and (not pass_gate) and (bad_gate_streak >= int(rollback_bad_streak)) and (cur_stage > 0):
+                if (rollback_enable
+                        and (not is_final_stage)   # ✅ NO rollback por gate en el stage final
+                        and (not pass_gate)
+                        and (bad_gate_streak >= int(rollback_bad_streak))
+                        and (cur_stage > 0)
+                    ):
                     old_stage = cur_stage
                     cur_stage -= 1
                     promote_hold = 0  # ✅ reset hold al hacer rollback
@@ -1079,6 +1217,7 @@ def main() -> None:
                             map_location=device,
                             restore_rng=False,
                         )
+                        move_optimizer_state_to_device_(trainer.optim, device)
                         print(f"🧯 Restored BEST checkpoint after rollback: {best_path}")
 
                         loop_term_recent.clear()
@@ -1140,6 +1279,78 @@ def main() -> None:
                 min_test_sr_official = sr_test_ppo
 
                 # ------------------------------
+                # ✅ AUTO-STOP: si PPO (oficial) alcanza SR objetivo sostenido, guardar y salir
+                # ------------------------------
+                if bool(STOP_ON_PPO_SR):
+                    if float(sr_test_ppo) >= float(STOP_PPO_SR):
+                        stop_sr_streak += 1
+                    else:
+                        stop_sr_streak = 0
+
+                    if stop_sr_streak >= int(STOP_PPO_STREAK_N):
+                        # Guardar checkpoint FINAL (modelo + optimizer + estado de currículo + RNG)
+                        save_checkpoint(
+                            STOP_SAVE_PATH,
+                            model=trainer.model,
+                            optimizer=trainer.optim,
+                            extra={
+                                "phase": 1,
+                                "obs_shape": obs_shape,
+                                "final_stop_reason": "ppo_sr_target_reached",
+                                "final_stop_target_sr": float(STOP_PPO_SR),
+                                "final_stop_streak_n": int(STOP_PPO_STREAK_N),
+                                "final_stop_sr_ppo": float(sr_test_ppo),
+                                "final_stop_min_test_hybrid": float(min_test_hybrid),
+                                "final_stop_hybrid_bfs_rate": float(hy_bfs),
+                                "best_test_sr_det_multiwalls_final": float(best_test_sr_final),
+                                "best_val_sr_any": float(best_val_sr_any),
+                                "cur_stage": int(cur_stage),
+                                "cur_wall_prob": float(cur_wall_prob),
+                                "episodes": int(episodes),
+                                "successes": int(successes),
+                                "steps_total": int(steps_total),
+                                "rescue_used_total": int(rescue_used_total),
+                                "episode_wall_counter": int(episode_wall_counter),
+                                "good_streak": int(good_streak),
+                                "need_k": int(need_k),
+                                "bad_gate_streak": int(bad_gate_streak),
+                                "walls_seed": int(WALLS_SEED),
+                                "num_wall_stages": int(num_wall_stages),
+                                "wall_p_start": float(wall_p_start),
+                                "wall_p_final": float(wall_p_final),
+                                "ppo_cfg": ppo_cfg.__dict__,
+                                "env_cfg": env_cfg.__dict__,
+                                "teacher_mix_max": float(teacher_mix_max),
+                                "guard_prob_max": float(guard_prob_max),
+                                "max_teacher_frac_per_rollout": float(max_teacher_frac_per_rollout),
+                                "ent_floor": float(ent_floor),
+                                "target_kl_floor": float(target_kl_floor),
+                                "clip_floor": float(clip_floor),
+                                "early_stop_kl_mult": float(trainer.cfg.early_stop_kl_mult),
+                                "has_bc": bool(has_bc),
+                                "last_test_sr_ppo": float(sr_test_ppo),
+                                "last_test_sr_hybrid_min": float(min_test_hybrid),
+                                "last_test_hybrid_bfs_rate": float(hy_bfs),
+                            },
+                            save_rng=True,
+                        )
+
+                        print(
+                            f"✅ AUTO-STOP: TEST_FINAL_PPO SR={sr_test_ppo:.3f} "
+                            f">= {STOP_PPO_SR:.2f} for {stop_sr_streak}/{STOP_PPO_STREAK_N} evals. "
+                            f"Saved: {STOP_SAVE_PATH}"
+                        )
+
+                        # ---- RESTORE RNG (igual que al final del eval) ----
+                        random.setstate(py_state)
+                        np.random.set_state(np_state)
+                        torch.set_rng_state(torch_state)
+                        if torch.cuda.is_available() and cuda_state is not None:
+                            torch.cuda.set_rng_state_all(cuda_state)
+
+                        return
+                    
+                # ------------------------------
                 # ✅ Finisher mode (empujar SR→1.0)
                 # ------------------------------
                 if (sr_test_ppo >= 0.93) and (min_test_hybrid >= 0.95) and (hy_bfs <= 0.10):
@@ -1162,9 +1373,14 @@ def main() -> None:
 
                 prev_best = float(best_test_sr_final)
 
+                # ✅ margen dinámico: cuando ya estamos en SR muy alto, protegemos más fuerte contra degradación
+                drop_margin_eff = float(test_drop_margin)
+                if prev_best >= 0.97:
+                    drop_margin_eff = 0.03  # más estricto cerca del techo
+
                 # 1️⃣ Detectar DROP vs best anterior
                 if test_drop_enable and (prev_best > 0.0):
-                    if min_test_sr_official < (prev_best - float(test_drop_margin)):
+                    if min_test_sr_official < (prev_best - float(drop_margin_eff)):
                         stage_transition_boost_updates = max(
                             stage_transition_boost_updates,
                             int(test_drop_boost_updates),
@@ -1191,6 +1407,7 @@ def main() -> None:
                         map_location=device,
                         restore_rng=False,
                     )
+                    move_optimizer_state_to_device_(trainer.optim, device)
 
                     trainer._set_lr_clamped(trainer._get_lr() * 0.85)
                     trainer._set_clip_clamped(float(trainer.cfg.clip_range) * 0.95)
@@ -1300,6 +1517,7 @@ def main() -> None:
                         "sr_ppo": float(sr_test_ppo),
                         "bfs_rate_hybrid": float(hy_bfs),
                         "best_test_sr_final_official": float(best_test_sr_final),
+                        "stop_sr_streak": int(stop_sr_streak),
                     }
                 )
 
@@ -1343,12 +1561,6 @@ def main() -> None:
                             cur_stage, num_wall_stages, wall_p_start, wall_p_final
                         )
 
-                        # --- Restaurar contadores para evitar repetir seeds post-resume ---
-                        episodes = int(extra.get("episodes", episodes))
-                        successes = int(extra.get("successes", successes))
-                        steps_total = int(extra.get("steps_total", steps_total))
-                        rescue_used_total = int(extra.get("rescue_used_total", rescue_used_total))
-                        episode_wall_counter = int(extra.get("episode_wall_counter", 0))
 
                         train_env.rebuild_walls(
                             seed=WALLS_SEED + 1000 * cur_stage + episode_wall_counter,
@@ -1396,6 +1608,8 @@ def main() -> None:
         dt = time.time() - t0
         print(f"Done. updates_ran={upd} time_sec={dt:.1f}")
         logger.close()
+
+    
 
 
 if __name__ == "__main__":

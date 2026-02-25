@@ -64,7 +64,10 @@ class EvalController:
             # ✅ rebuild walls por episodio (multi-walls) si el env lo soporta
             if bool(cfg.rebuild_walls_each_episode) and hasattr(self.env, "rebuild_walls"):
                 ws = int(cfg.walls_seed_base + ep)
-                self.env.rebuild_walls(seed=ws, wall_prob=cfg.wall_prob)
+                wp = cfg.wall_prob
+                if wp is None:
+                    wp = float(getattr(self.env.cfg, "wall_prob", 0.0))
+                self.env.rebuild_walls(seed=ws, wall_prob=float(wp))
 
             if bool(cfg.deterministic):
                 self.policy.set_deterministic_seed(seed)
@@ -89,7 +92,7 @@ class EvalController:
 
                     if bfs_disable_ep:
                         use_bfs = False
-                        
+
                     info_looped = bool(info.get("looped", False))
                     no_prog = int(info.get("no_progress", 0))
                     loop_hits = int(info.get("loop_hits", 0))
@@ -106,18 +109,22 @@ class EvalController:
                     if not use_bfs:
                         logits, _v = self.policy.model(obs_t)
 
+                        fa = int(getattr(self.policy, "fallback_action", 0))
+                        nan_repl = float(getattr(self.policy, "nan_repl", 0.0))
+
                         logits = mask_invalid_actions(
                             obs_t,
                             logits,
                             enable=bool(getattr(self.policy, "enable_action_mask", True)),
+                            fallback_action=fa,
                         )
 
-                        logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
-                        logits = fix_all_neginf_rows(logits, fill=0.0)
+                        logits = sanitize_logits_keep_neginf(logits, nan_repl=nan_repl)
+                        logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=fa)
 
-                        logp_all = F.log_softmax(logits, dim=-1)
-                        probs = logp_all.exp()
-
+                        dist = torch.distributions.Categorical(logits=logits)
+                        probs = dist.probs
+                        
                         if not torch.isfinite(probs).all():
                             # fallback: no uses BFS por "confianza", conf alta para bloquear
                             use_bfs = False

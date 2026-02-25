@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-
 @dataclass
 class RunLogger:
     run_dir: str
@@ -40,6 +39,52 @@ class RunLogger:
             _jsonl_file=jsonl_f,
         )
 
+    @staticmethod
+    def _to_jsonable(x: Any) -> Any:
+        """
+        Convierte valores a tipos serializables por json:
+        - numpy scalars -> float/int
+        - numpy arrays -> list
+        - torch tensors -> list/float/int
+        - dict/list/tuple -> recursivo
+        - fallback -> str(x)
+        """
+        # dict/list/tuple (recursivo)
+        if isinstance(x, dict):
+            return {str(k): RunLogger._to_jsonable(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [RunLogger._to_jsonable(v) for v in x]
+
+        # numpy
+        try:
+            import numpy as np  # local import (no obliga dependencia en runtime si no se usa)
+            if isinstance(x, np.generic):
+                return x.item()
+            if isinstance(x, np.ndarray):
+                return x.tolist()
+        except Exception:
+            pass
+
+        # torch
+        try:
+            import torch
+            if torch.is_tensor(x):
+                t = x.detach()
+                if t.numel() == 1:
+                    v = t.item()
+                    # item() puede devolver tipos numpy/py; json lo soporta si es int/float
+                    return v
+                return t.to("cpu").tolist()
+        except Exception:
+            pass
+
+        # tipos básicos ya serializables
+        if isinstance(x, (str, int, float, bool)) or x is None:
+            return x
+
+        # fallback robusto
+        return str(x)
+    
     def log(self, row: Dict[str, Any]) -> None:
         """
         Escribe 1 evento. Seguro: si falla, no rompe el training.
@@ -48,8 +93,9 @@ class RunLogger:
           - CSV: columnas estables (se fijan con el primer row)
         """
         try:
-            # JSONL
-            self._jsonl_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+            # JSONL (safe)
+            row_safe = self._to_jsonable(row)
+            self._jsonl_file.write(json.dumps(row_safe, ensure_ascii=False) + "\n")
             self._jsonl_file.flush()
 
             # CSV (fields fijas)
@@ -61,7 +107,7 @@ class RunLogger:
 
             out = {}
             for k in self._csv_fields or []:
-                v = row.get(k, "")
+                v = row_safe.get(k, "")
                 # CSV friendly
                 if isinstance(v, (dict, list, tuple)):
                     v = json.dumps(v, ensure_ascii=False)

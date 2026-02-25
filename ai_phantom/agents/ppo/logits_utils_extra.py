@@ -19,6 +19,9 @@ def fix_all_neginf_rows(
       - pone todo a -inf
       - y habilita SOLO una acción fallback con 'fill' (0.0 => prob ~1.0 para esa acción tras softmax)
     """
+    if not float(fill) == float(fill):  # NaN check simple
+        fill = 0.0
+
     # Esperamos [B, A]. Si no, no tocamos nada.
     if logits.dim() != 2:
         return logits

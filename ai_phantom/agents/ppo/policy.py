@@ -6,7 +6,6 @@ from typing import Optional
 from .logits_utils_extra import fix_all_neginf_rows
 
 import torch
-import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from .action_mask import mask_invalid_actions
@@ -25,13 +24,22 @@ class Policy:
     - deterministic=True hace tie-break determinista (por seed) cuando hay empate (o casi empate).
     - action masking para evitar acciones inválidas (choques/bounds) usando obs channels.
     """
-    def __init__(self, model, tie_eps: float = 1e-6, enable_action_mask: bool = True):
+    def __init__(
+        self,
+        model,
+        tie_eps: float = 1e-6,
+        enable_action_mask: bool = True,
+        nan_repl: float = 0.0,
+        fallback_action: int = 0,
+        ):
         self.model = model
         self.tie_eps = float(tie_eps)
         self.enable_action_mask = bool(enable_action_mask)
 
         self._det_seed: Optional[int] = None
         self._gen: Optional[torch.Generator] = None
+        self.nan_repl = float(nan_repl)
+        self.fallback_action = int(fallback_action)
 
     def set_deterministic_seed(self, seed: Optional[int]) -> None:
         if seed is None:
@@ -53,13 +61,30 @@ class Policy:
             value = value.squeeze(-1)
 
         # Action masking (misma lógica que usará el trainer)
-        logits = mask_invalid_actions(obs, logits, enable=self.enable_action_mask)
+        logits = mask_invalid_actions(
+            obs,
+            logits,
+            enable=self.enable_action_mask,
+            fallback_action=int(self.fallback_action),
+        )
 
         # ✅ Protección numérica igual que trainer
-        logits = sanitize_logits_keep_neginf(logits, nan_repl=0.0)
-        logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=0)
+        logits = sanitize_logits_keep_neginf(logits, nan_repl=float(self.nan_repl))
+        logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=int(self.fallback_action))
         
-                # Construye distribución EXACTAMENTE como trainer (más estable que probs=exp(log_softmax))
+        row_has_finite = torch.isfinite(logits).any(dim=-1)  # [B]
+        if (not bool(row_has_finite.all().item())):
+            # Si llegara a pasar (muy raro), reparamos filas malas de forma local
+            logits = fix_all_neginf_rows(
+                logits, fill=0.0, fallback_action=int(self.fallback_action)
+            )
+
+        # ✅ Blindaje extremo: si algo raro dejó logits no finitos, fuerza fallback
+        if torch.isnan(logits).any() or torch.isposinf(logits).any():
+            logits = sanitize_logits_keep_neginf(logits, nan_repl=float(self.nan_repl))
+            logits = fix_all_neginf_rows(logits, fill=0.0, fallback_action=int(self.fallback_action))
+            
+        # Construye distribución EXACTAMENTE como trainer (más estable que probs=exp(log_softmax))
         dist = Categorical(logits=logits)
 
         if deterministic:

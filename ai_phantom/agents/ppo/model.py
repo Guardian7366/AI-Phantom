@@ -50,7 +50,7 @@ class CnnActorCritic(nn.Module):
         # Inicialización razonable para PPO
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-                nn.init.orthogonal_(m.weight, gain=1.0)
+                nn.init.orthogonal_(m.weight, gain=nn.init.calculate_gain("relu"))
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
         # Cabezas: policy con gain pequeño para estabilidad
@@ -63,12 +63,13 @@ class CnnActorCritic(nn.Module):
         """
         obs: (B,C,H,W) float32
         returns:
-          logits: (B, A)
-          value: (B,)  (squeeze)
+        logits: (B, A)
+        value: (B,)  (squeeze)
         """
-        # ✅ safety net: si llega algo corrupto, no explota el update
         if not torch.isfinite(obs).all():
             obs = torch.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+
+        obs = obs.to(dtype=torch.float32).contiguous()
 
         x = self.backbone(obs)
         x = self.mlp(x)

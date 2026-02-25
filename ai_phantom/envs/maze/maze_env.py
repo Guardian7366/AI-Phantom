@@ -140,7 +140,8 @@ class MazeEnv:
 
     def rebuild_walls(self, *, seed: Optional[int] = None, wall_prob: Optional[float] = None) -> None:
         self._dist_map = None
-
+        self.t = 0
+        self.visited.fill(0)
         self._pos_hist.clear()
         self._no_progress = 0
         self._loop_hits = 0
@@ -155,6 +156,8 @@ class MazeEnv:
         tries = int(getattr(self.cfg, "rebuild_max_tries", 50))
         stride = int(getattr(self.cfg, "rebuild_seed_stride", 9973))
         ensure = bool(getattr(self.cfg, "ensure_solvable_walls", True))
+
+        walls = self.walls  # fallback seguro
 
         for k in range(max(1, tries)):
             if base_seed is not None:
@@ -305,6 +308,19 @@ class MazeEnv:
                 else:
                     self._no_progress = 0
                     self._last_dist = -1
+
+            # ✅ NEW: si bump genera estancamiento sostenido, marca looped también aquí
+            if bool(self.cfg.enable_loop_detection) and (self._dist_map is not None):
+                if self._no_progress >= int(self.cfg.stagnation_steps):
+                    looped = True
+                    loop_reason = loop_reason or "stagnation"
+                    reward -= float(self.cfg.stagnation_penalty)
+
+                    self._loop_hits += 1
+                    if bool(self.cfg.terminate_on_loop) and self._loop_hits >= int(self.cfg.loop_terminate_hits):
+                        done = True
+                        reached = False
+                        reward -= float(self.cfg.loop_terminate_extra_penalty)
         else:
 
             # ✅ Diamond: Potential-based shaping con BFS (PBRS real)
@@ -537,7 +553,8 @@ class MazeEnv:
             channels.append(v)
 
         if self.cfg.include_step_channel:
-            s = np.full((h, w), fill_value=float(self.t) / float(self.cfg.max_steps), dtype=np.float32)
+            den = float(max(1, int(self.cfg.max_steps)))
+            s = np.full((h, w), fill_value=float(self.t) / den, dtype=np.float32)
             channels.append(s)
 
         if bool(self.cfg.include_dist_channel):
