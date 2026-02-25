@@ -85,7 +85,7 @@ class MazeTrainingScreen:
     # ----------------------
     def _create_buttons(self):
         #Main buttons
-        self.btn_back = Button((20, 20, 140, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
+        self.btn_back = Icon_Button((20, 20, 70, 70), "assets/images/back.png", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
         self.btn_settings = Icon_Button((WINDOW_WIDTH - 160, 20, 75, 75), "assets/images/gear.png", self.font_button, (40, 40, 60), (80, 80, 120), click_sound=self.click_sound)
         #Play bbutton
         self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
@@ -125,7 +125,7 @@ class MazeTrainingScreen:
         self.btn_ff.rect.size = (ff_w, ff_h)
 
         self.btn_back.rect.topleft = (20, 30)
-        self.btn_back.rect.size = (140, 50)
+        self.btn_back.rect.size = (70, 70)
 
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)

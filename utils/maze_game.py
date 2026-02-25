@@ -78,7 +78,7 @@ class MazeGameScreen:
     # ----------------------
     def _create_buttons(self):
         #Main buttons
-        self.btn_back = Button((20, 20, 140, 50), "BACK", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
+        self.btn_back = Icon_Button((20, 20, 70, 70), "assets/images/back.png", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
         self.btn_settings = Icon_Button((WINDOW_WIDTH - 160, 20, 75, 75), "assets/images/gear.png", self.font_button, (40, 40, 60), (80, 80, 120), click_sound=self.click_sound)
 
     def _recalc_layout(self):
@@ -110,7 +110,7 @@ class MazeGameScreen:
         self.player_score_pos = (width * 0.75, 65)
 
         self.btn_back.rect.topleft = (20, 30)
-        self.btn_back.rect.size = (140, 50)
+        self.btn_back.rect.size = (70, 70)
 
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)
