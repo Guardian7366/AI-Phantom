@@ -1,0 +1,2 @@
+Si quieren el 8.5 - 9.0 en el entrenamiento, corran el modelo 2 veces seguidas, el entrenamiento es acomulativo, pero no lo hagan una 3 vez
+todavia no esta asegurado para llegar al 1.0
