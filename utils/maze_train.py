@@ -2,6 +2,7 @@ from cmath import phase
 
 import pygame
 import math
+import random
 
 from ai_phantom.envs.maze.maze_env import MazeConfig, MazeEnv
 from ai_phantom.planners.bfs import bfs_plan, path_to_actions
@@ -230,6 +231,29 @@ class MazeTrainingScreen:
             return None
 
         return None
+    
+    def move_ghost(self):
+        if self.maze_actions is None:
+            self.current_tick = pygame.time.get_ticks()
+            path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
+            if path is not None:
+                self.maze_actions = path_to_actions(path)
+            else:
+                self.maze_grid = None  # Trigger new maze generation
+        else:
+            # Step through actions at the current speed when playing
+            if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
+                self.current_tick = pygame.time.get_ticks()
+                # Step the maze_env with the next action
+                self.current_action = self.maze_actions.pop(0)
+                # Update the maze environment and grid 
+                obs, reward, done, info = self.maze_env.step(self.current_action)
+                self.maze_grid = self.maze_env.render().splitlines()
+                if done:
+                    self.current_action = "idle"  # Reset action to idle when episode ends
+                    self.maze_actions = None  # Reset for next episode
+                    self.maze_grid = None  # Trigger new maze generation
+                    self.episode_num += 1
 
     # ----------------------------------
     # MAIN LOOP
@@ -241,30 +265,14 @@ class MazeTrainingScreen:
             self._recalc_layout()
 
             if self.maze_grid is None:
-                obs, info = self.maze_env.reset(seed=0, phase=0)
+                seed = random.randint(0, 9999)
+                wall_prob = random.uniform(0.1, 0.35)  # Random wall density for variability
+                self.maze_env.rebuild_walls(seed=seed, wall_prob=wall_prob)  # Ensure new maze layout
+                obs, info = self.maze_env.reset(seed=seed, phase=1)
                 self.maze_grid = self.maze_env.render().splitlines()
 
-            if self.maze_actions is None:
-                self.current_tick = pygame.time.get_ticks()
-                path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
-                if path is not None:
-                    self.maze_actions = path_to_actions(path)
-                else:
-                    self.maze_grid = None  # Trigger new maze generation if no path found
-            else:
-                # Step through actions at the current speed when playing
-                if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
-                    self.current_tick = pygame.time.get_ticks()
-                    # Step the maze_env with the next action
-                    self.current_action = self.maze_actions.pop(0)
-                    # Update the maze environment and grid 
-                    obs, reward, done, info = self.maze_env.step(self.current_action)
-                    self.maze_grid = self.maze_env.render().splitlines()
-                    if done:
-                        self.current_action = "idle"  # Reset action to idle when episode ends
-                        self.maze_actions = None  # Reset for next episode
-                        self.maze_grid = None  # Trigger new maze generation
-                        self.episode_num += 1
+            if self.maze_env.goal is not None:
+                self.move_ghost()  # Start the ghost movement logic
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
