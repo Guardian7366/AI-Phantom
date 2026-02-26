@@ -1,13 +1,10 @@
-from cmath import phase
-
 import pygame
 import math
-import random
 
-from ai_phantom.envs.maze.maze_env import MazeConfig, MazeEnv
-from ai_phantom.planners.bfs import bfs_plan, path_to_actions
 from utils.start_menu import Button, Icon_Button, SettingsPanel
 from utils.conf import WINDOW_WIDTH, FPS, Config
+from scripts.train_ppo import main as train_ppo_main
+from scripts.train_ppo import setup as train_ppo_setup
 
 
 class MazeTrainingScreen:
@@ -32,23 +29,14 @@ class MazeTrainingScreen:
         #Playback state
         self.playing = False
         self.speed_index = 0
-        self.speeds = [1, 2, 4]  # x1, x2, x4
-        self.sleeps = [500, 250, 125]  # ms per step for each speed
+        self.speeds = [1, 2, 4, 10]  # x1, x2, x4, x10
+        self.sleeps = [500, 250, 125, 50]  # ms per step for each speed
         self.current_tick = 0
 
         #Flags
         self.show_settings = False
 
-        self.maze_cfg = MazeConfig(
-            height=12,
-            width=12,
-            use_walls=True,
-            max_steps=256,
-            min_manhattan=6,
-        )
-        self.maze_env = MazeEnv(self.maze_cfg, seed=0)
         self.maze_grid = None
-        self.maze_actions = None
         self.current_action = "idle"
 
         #Create buttons
@@ -77,8 +65,9 @@ class MazeTrainingScreen:
 
         self.success_num = 0
         self.episode_num = 0
-        self.best_episode = 0
-        self.worst_episode = 0
+
+        self.maze_cfg, self.maze_env, ppo_cfg = train_ppo_setup()
+        self.ppo_main = train_ppo_main(self.maze_cfg, self.maze_env, ppo_cfg, verbose=False)
 
     # ----------------------
     # CREATION & LAYOUT
@@ -186,9 +175,7 @@ class MazeTrainingScreen:
             f"Playing: {'Yes' if self.playing else 'No'}",
             f"Speed: x{self.speeds[self.speed_index]}",
             f"Episode: {self.episode_num}",
-            f"Success: {int((self.success_num / max(1, self.episode_num)) * 100)}%",
-            f"Best: {self.best_episode} steps" if self.best_episode > 0 else "Best: -",
-            f"Worst: {self.worst_episode} steps" if self.worst_episode > 0 else "Worst: -",
+            f"Success: {self.success_num}",
         ]
         for ln in lines:
             surf = self.font_text.render(ln, False, (200, 200, 200))
@@ -234,33 +221,13 @@ class MazeTrainingScreen:
             return None
 
         return None
-    
-    def move_ghost(self):
-        if self.maze_actions is None:
+
+    def update_ghost(self):
+        if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
             self.current_tick = pygame.time.get_ticks()
-            path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
-            if path is not None:
-                self.maze_actions = path_to_actions(path)
-            else:
-                self.maze_grid = None  # Trigger new maze generation
-        else:
-            # Step through actions at the current speed when playing
-            if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
-                self.current_tick = pygame.time.get_ticks()
-                # Step the maze_env with the next action
-                self.current_action = self.maze_actions.pop(0)
-                # Update the maze environment and grid 
-                obs, reward, done, info = self.maze_env.step(self.current_action)
-                self.maze_grid = self.maze_env.render().splitlines()
-                if done:
-                    self.current_action = "idle"  # Reset action to idle when episode ends
-                    self.maze_actions = None  # Reset for next episode
-                    self.maze_grid = None  # Trigger new maze generation
-                    self.episode_num += 1
-                    if info["reached"]:
-                        self.success_num += 1
-                        self.best_episode = min(self.best_episode, self.maze_env.t) if self.best_episode > 0 else self.maze_env.t
-                        self.worst_episode = max(self.worst_episode, self.maze_env.t)
+            # Step the PPO training to get next action
+            self.episode_num, self.current_action, self.success_num = next(self.ppo_main)
+            self.maze_grid = self.maze_env.render().splitlines()
 
     # ----------------------------------
     # MAIN LOOP
@@ -271,15 +238,7 @@ class MazeTrainingScreen:
             # Recompute layout only if size changed
             self._recalc_layout()
 
-            if self.maze_grid is None:
-                seed = random.randint(0, 9999)
-                wall_prob = random.uniform(0.1, 0.35)  # Random wall density for variability
-                self.maze_env.rebuild_walls(seed=seed, wall_prob=wall_prob)  # Ensure new maze layout
-                obs, info = self.maze_env.reset(seed=seed, phase=1)
-                self.maze_grid = self.maze_env.render().splitlines()
-
-            if self.maze_env.goal is not None:
-                self.move_ghost()  # Start the ghost movement logic
+            self.update_ghost()  # Start the ghost movement logic
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:

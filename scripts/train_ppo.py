@@ -21,12 +21,8 @@ class StopConfig:
     min_updates_before_stop: int = 50
 
 
-def main() -> None:
+def setup() -> None:
     set_global_seed(123)
-
-    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
-    device = dev_cfg.device
-    print("Device:", device)
 
     # ✅ C3: novelty OFF + shaping clamp
     env_cfg = MazeConfig(
@@ -83,23 +79,30 @@ def main() -> None:
     env_cfg.potential_gamma = float(ppo_cfg.gamma)
     
     env = MazeEnv(env_cfg, seed=0)
+
+    # Pass the maze cfg and env
+    return (env_cfg, env, ppo_cfg)
+
+
+def main(env_cfg, env, ppo_cfg, verbose: bool = False):
+    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
+    device = dev_cfg.device
+
     sync_horizon([env], ppo_cfg.rollout_len, name="Phase0")
     obs0, _ = env.reset(seed=0, phase=0)
     obs_shape = tuple(obs0.shape)
 
     model = CnnActorCritic(obs_shape=obs_shape, num_actions=4)
-
-    
     trainer = PPOTrainer(model=model, cfg=ppo_cfg, device=device)
 
     dummy = torch.zeros((1, *obs_shape), device=device, dtype=torch.float32)
     trainer.model = safe_torch_compile(trainer.model, device=device, example_input=dummy)
 
     policy = Policy(
-    model=trainer.model,
-    enable_action_mask=True,
-    nan_repl=float(ppo_cfg.nan_logits_replacement),
-    fallback_action=0,
+        model=trainer.model,
+        enable_action_mask=True,
+        nan_repl=float(ppo_cfg.nan_logits_replacement),
+        fallback_action=0,
     )
 
     buffer = RolloutBuffer(
@@ -128,12 +131,14 @@ def main() -> None:
     obs, info = env.reset(seed=train_seed_base, phase=phase)
     episodes = 0
     successes = 0
+    action = None
 
     for update_idx in range(1, int(total_updates) + 1):
         buffer.reset()
         rollout_last_done = False
+        for _ in range(int(ppo_cfg.rollout_len)):
+            yield (episodes, action, best_sr)
 
-        for _t in range(int(ppo_cfg.rollout_len)):
             obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
             out = policy.act(obs_t, deterministic=False)
 
@@ -185,20 +190,18 @@ def main() -> None:
             print("⚠️ nan_abort detected -> lowering LR x0.5")
 
         train_sr = (successes / episodes) if episodes > 0 else 0.0
-        print(
-            f"[UPD {update_idx:04d}] episodes={episodes:5d} trainSR={train_sr:.3f} "
-            f"pi={metrics['pi_loss']:.4f} vf={metrics['vf_loss']:.4f} ev={metrics['explained_var']:.3f} "
-            f"ent={metrics['entropy']:.4f} kl={metrics['approx_kl']:.5f} stop={int(metrics['early_stop'])} "
-            f"nan={int(metrics.get('nan_abort', 0.0) > 0.5)}"
-        )
+        if verbose:
+            print(
+                f"[UPD {update_idx:04d}] episodes={episodes:5d} trainSR={train_sr:.3f} "
+                f"pi={metrics['pi_loss']:.4f} vf={metrics['vf_loss']:.4f} ev={metrics['explained_var']:.3f} "
+                f"ent={metrics['entropy']:.4f} kl={metrics['approx_kl']:.5f} stop={int(metrics['early_stop'])} "
+                f"nan={int(metrics.get('nan_abort', 0.0) > 0.5)}"
+            )
 
         if update_idx % int(eval_every) == 0:
             ev_det = evaluator.evaluate(EvalConfig(episodes=int(eval_episodes), phase=phase, deterministic=True))
-            ev_sto = evaluator.evaluate(EvalConfig(episodes=int(eval_episodes), phase=phase, deterministic=False))
-            print(
-                f"   EVAL(det): SR={ev_det['sr']:.3f} avg_steps={ev_det['avg_steps']:.1f} | "
-                f"EVAL(sto): SR={ev_sto['sr']:.3f} avg_steps={ev_sto['avg_steps']:.1f}"
-            )
+            if verbose:
+                print(f"   EVAL(det): SR={ev_det['sr']:.3f} avg_steps={ev_det['avg_steps']:.1f}")
 
             if float(ev_det["sr"]) > float(best_sr):
                 best_sr = float(ev_det["sr"])
@@ -222,12 +225,11 @@ def main() -> None:
                 good_eval_streak = 0
 
             if update_idx >= int(stop_cfg.min_updates_before_stop) and good_eval_streak >= int(stop_cfg.consecutive_evals):
-                print(
-                    f"   🏁 Early-stop: detSR={ev_det['sr']:.3f} "
-                    f"for {good_eval_streak} evals (updates >= {stop_cfg.min_updates_before_stop})."
-                )
+                print(f"   🏁 Early-stop: detSR={ev_det['sr']:.3f} for {good_eval_streak} evals (updates >= {stop_cfg.min_updates_before_stop}).")
                 break
 
 
 if __name__ == "__main__":
-    main()
+    env_cfg, env, ppo_cfg = setup()
+    for _ in main(env_cfg, env, ppo_cfg, verbose=True):
+        pass

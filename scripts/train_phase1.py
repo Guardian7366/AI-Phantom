@@ -385,8 +385,6 @@ def main() -> None:
         )
         print(f"Loaded BC warm-start checkpoint: {bc_ckpt}")
 
-        best_path = "results/checkpoints/best_phase1.pt"
-
     # ------------------------------
     # Eval sizes (FAST vs TEST)
     # (deben existir antes de EVAL-ONLY)
@@ -472,12 +470,11 @@ def main() -> None:
     # ------------------------------
     # ✅ Resume real desde best_phase1.pt (B1)
     # ------------------------------
-    resume_path = best_path
-    if os.path.exists(resume_path):
-        print(f"🔁 Resuming Phase1 from {resume_path}")
+    if os.path.exists(best_path):
+        print(f"🔁 Resuming Phase1 from {best_path}")
 
         extra = load_checkpoint(
-            resume_path,
+            best_path,
             model=trainer.model,
             optimizer=trainer.optim,  # ✅ restaurar optimizer
             map_location=device,
