@@ -137,7 +137,6 @@ def main(env_cfg, env, ppo_cfg, verbose=False) -> iter[tuple[int, int | None, in
         buffer.reset()
         rollout_last_done = False
         for _ in range(int(ppo_cfg.rollout_len)):
-            yield (episodes, action, successes)
 
             obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
             out = policy.act(obs_t, deterministic=False)
@@ -147,6 +146,7 @@ def main(env_cfg, env, ppo_cfg, verbose=False) -> iter[tuple[int, int | None, in
             value = float(out.value.item())
 
             next_obs, reward, done, info = env.step(action)
+            yield (episodes, action, successes)
 
             buffer.add(
                 obs=obs,

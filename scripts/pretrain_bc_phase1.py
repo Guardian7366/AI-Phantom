@@ -257,8 +257,6 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
 
             # Recolecta pasos teacher
             for _ in range(int(cfg.steps_per_ep)):
-                yield (ep, action, successes)
-
                 action = _teacher_action(env)
 
                 obs_batch.append(obs.copy())
@@ -266,6 +264,7 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
 
                 obs, _, done, info = env.step(action)
                 step_counter += 1
+                yield (ep, action, successes)
 
                 # Train step cuando llenamos batch
                 if len(act_batch) >= int(cfg.batch_size):

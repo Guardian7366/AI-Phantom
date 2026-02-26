@@ -30,6 +30,7 @@ class MazeTrainingScreen:
 
         #Playback state
         self.playing = False
+        self.ended = False
         self.speed_index = 0
         self.speeds = [1, 2, 4, 10]  # x1, x2, x4, x10
         self.sleeps = [500, 250, 125, 50]  # ms per step for each speed
@@ -68,10 +69,12 @@ class MazeTrainingScreen:
         self.success_num = 0
         self.episode_num = 0
 
-        # self.maze_cfg, self.maze_env, ppo_cfg = train_ppo_setup()
-        # self.train_main = train_ppo_main(self.maze_cfg, self.maze_env, ppo_cfg, verbose=False)
-        self.maze_cfg, self.maze_env, bc_cfg = bc_setup()
-        self.train_main = bc_main(self.maze_cfg, self.maze_env, bc_cfg, verbose=False)
+        if True:
+            self.maze_cfg, self.maze_env, ppo_cfg = train_ppo_setup()
+            self.train_main = train_ppo_main(self.maze_cfg, self.maze_env, ppo_cfg, verbose=False)
+        else:
+            self.maze_cfg, self.maze_env, bc_cfg = bc_setup()
+            self.train_main = bc_main(self.maze_cfg, self.maze_env, bc_cfg, verbose=False)
 
     # ----------------------
     # CREATION & LAYOUT
@@ -194,8 +197,11 @@ class MazeTrainingScreen:
             b.draw(self.screen)
 
         #Synchronize labels
-        self.btn_play.text = "PAUSE" if self.playing else "PLAY"
-        self.btn_ff.text = f"x{self.speeds[self.speed_index]}"
+        if self.ended:
+            self.btn_play.text = "ENDED"
+        else:
+            self.btn_play.text = "PAUSE" if self.playing else "PLAY"
+            self.btn_ff.text = f"x{self.speeds[self.speed_index]}"
 
     # ----------------------------------
     # ELEMENT INTERACTION
@@ -203,7 +209,6 @@ class MazeTrainingScreen:
     def _handle_control_click(self, event):
         if event.type != pygame.MOUSEBUTTONDOWN:
             return None
-        pos = event.pos
 
         if self.btn_back.is_clicked(event):
             #Return value to move to selection menu in main
@@ -212,6 +217,10 @@ class MazeTrainingScreen:
         if self.btn_settings.is_clicked(event):
             #Display setting panel
             self.show_settings = True
+            return None
+
+        if self.ended:
+            # No need to check play controls
             return None
 
         if self.btn_play.is_clicked(event):
@@ -227,7 +236,7 @@ class MazeTrainingScreen:
         return None
 
     def update_ghost(self):
-        if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
+        if pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
             self.current_tick = pygame.time.get_ticks()
             # Step the PPO training to get next action
             self.episode_num, self.current_action, self.success_num = next(self.train_main)
@@ -242,7 +251,14 @@ class MazeTrainingScreen:
             # Recompute layout only if size changed
             self._recalc_layout()
 
-            self.update_ghost()  # Start the ghost movement logic
+            try:
+                if self.playing and not self.ended:
+                    self.update_ghost()  # Start the ghost movement logic
+            except StopIteration:
+                # Training finished, reset state
+                self.ended = True
+                self.playing = False
+                self.current_action = "idle"
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
