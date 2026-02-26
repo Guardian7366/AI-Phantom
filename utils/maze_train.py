@@ -5,6 +5,8 @@ from utils.start_menu import Button, Icon_Button, SettingsPanel
 from utils.conf import WINDOW_WIDTH, FPS, Config
 from scripts.train_ppo import main as train_ppo_main
 from scripts.train_ppo import setup as train_ppo_setup
+from scripts.pretrain_bc_phase1 import main as bc_main
+from scripts.pretrain_bc_phase1 import setup as bc_setup
 
 
 class MazeTrainingScreen:
@@ -66,8 +68,10 @@ class MazeTrainingScreen:
         self.success_num = 0
         self.episode_num = 0
 
-        self.maze_cfg, self.maze_env, ppo_cfg = train_ppo_setup()
-        self.ppo_main = train_ppo_main(self.maze_cfg, self.maze_env, ppo_cfg, verbose=False)
+        # self.maze_cfg, self.maze_env, ppo_cfg = train_ppo_setup()
+        # self.train_main = train_ppo_main(self.maze_cfg, self.maze_env, ppo_cfg, verbose=False)
+        self.maze_cfg, self.maze_env, bc_cfg = bc_setup()
+        self.train_main = bc_main(self.maze_cfg, self.maze_env, bc_cfg, verbose=False)
 
     # ----------------------
     # CREATION & LAYOUT
@@ -226,7 +230,7 @@ class MazeTrainingScreen:
         if self.playing and pygame.time.get_ticks() - self.current_tick > self.sleeps[self.speed_index]:
             self.current_tick = pygame.time.get_ticks()
             # Step the PPO training to get next action
-            self.episode_num, self.current_action, self.success_num = next(self.ppo_main)
+            self.episode_num, self.current_action, self.success_num = next(self.train_main)
             self.maze_grid = self.maze_env.render().splitlines()
 
     # ----------------------------------

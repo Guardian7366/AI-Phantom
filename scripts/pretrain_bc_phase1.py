@@ -119,11 +119,11 @@ def _quick_eval_teacher_acc(
         obs, _ = env.reset(seed=int(seed_base + ep), phase=int(phase))
         _sync_horizon_env(env, expected_max_steps=expected_max_steps, where="quick_eval:after_reset")
 
-        for _t in range(int(steps_per_ep)):
+        for _ in range(int(steps_per_ep)):
             a_star = _teacher_action(env)
 
             obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
-            logits, _v = model(obs_t)
+            logits, _ = model(obs_t)
 
             # action masking + sanitize igual a PPO
             logits = mask_invalid_actions(obs_t, logits, enable=True)
@@ -138,33 +138,15 @@ def _quick_eval_teacher_acc(
             correct += 1 if (a_hat == a_star) else 0
             total += 1
 
-            obs, _r, done, _info = env.step(a_star)
+            obs, _, done, _ = env.step(a_star)
             if done:
                 break
 
     return (correct / total) if total > 0 else 0.0
 
 
-def main() -> None:
+def setup() -> tuple[MazeConfig, MazeEnv, BCConfig]:
     cfg = BCConfig()
-    set_global_seed(cfg.seed)
-
-    # Guard rails básicos del dataset/horizon
-    if int(cfg.steps_per_ep) <= 0:
-        raise ValueError(f"steps_per_ep debe ser > 0, recibido={cfg.steps_per_ep}")
-    if int(cfg.max_steps_env) <= 0:
-        raise ValueError(f"max_steps_env debe ser > 0, recibido={cfg.max_steps_env}")
-    if int(cfg.steps_per_ep) > int(cfg.max_steps_env):
-        raise ValueError(
-            f"steps_per_ep ({cfg.steps_per_ep}) no puede ser > max_steps_env ({cfg.max_steps_env}). "
-            f"Sube max_steps_env o baja steps_per_ep."
-        )
-
-    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
-    device = dev_cfg.device
-    print("Device:", device)
-
-    os.makedirs("results/checkpoints", exist_ok=True)
 
     # ✅ Env alineado con train_phase1
     env_cfg = MazeConfig(
@@ -200,29 +182,52 @@ def main() -> None:
         progress_reward_clip=0.05,
     )
 
-    # En BC el ctor seed fija el primer layout; luego rebuild_walls da diversidad si está habilitado
     env = MazeEnv(env_cfg, seed=int(cfg.walls_seed_init))
+
+    return (env_cfg, env, cfg)
+
+
+def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
+    set_global_seed(cfg.seed)
+
+    # Guard rails básicos del dataset/horizon
+    if int(cfg.steps_per_ep) <= 0:
+        raise ValueError(f"steps_per_ep debe ser > 0, recibido={cfg.steps_per_ep}")
+    if int(cfg.max_steps_env) <= 0:
+        raise ValueError(f"max_steps_env debe ser > 0, recibido={cfg.max_steps_env}")
+    if int(cfg.steps_per_ep) > int(cfg.max_steps_env):
+        raise ValueError(
+            f"steps_per_ep ({cfg.steps_per_ep}) no puede ser > max_steps_env ({cfg.max_steps_env}). "
+            f"Sube max_steps_env o baja steps_per_ep."
+        )
+
+    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
+    device = dev_cfg.device
+
+    os.makedirs("results/checkpoints", exist_ok=True)
+
+    # En BC el ctor seed fija el primer layout; luego rebuild_walls da diversidad si está habilitado
     _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="init")
 
     # Modelo
     obs0, _ = env.reset(seed=0, phase=int(cfg.phase))
     _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="after_first_reset")
 
-    print("BC obs_shape:", obs0.shape, "C=", obs0.shape[0])
     obs_shape = tuple(obs0.shape)
     model = CnnActorCritic(obs_shape=obs_shape, num_actions=4).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=float(cfg.lr), eps=1e-5)
 
-    print(
-        "BC setup:"
-        f" use_walls={cfg.use_walls}"
-        f" wall_prob={cfg.wall_prob}"
-        f" walls_seed_init={cfg.walls_seed_init}"
-        f" episodes/epoch={cfg.episodes}"
-        f" steps/ep={cfg.steps_per_ep}"
-        f" epochs={cfg.epochs}"
-        f" horizon(max_steps)={cfg.max_steps_env}"
-    )
+    if verbose:
+        print(
+            "BC setup:"
+            f" use_walls={cfg.use_walls}"
+            f" wall_prob={cfg.wall_prob}"
+            f" walls_seed_init={cfg.walls_seed_init}"
+            f" episodes/epoch={cfg.episodes}"
+            f" steps/ep={cfg.steps_per_ep}"
+            f" epochs={cfg.epochs}"
+            f" horizon(max_steps)={cfg.max_steps_env}"
+        )
 
     model.train()
 
@@ -232,6 +237,8 @@ def main() -> None:
 
     step_counter = 0
     update_counter = 0
+    successes = 0
+    action = None
 
     for epc in range(int(cfg.epochs)):
         base = int(cfg.train_seed_base + epc * 1_000_000)  # diversidad por epoch
@@ -245,17 +252,19 @@ def main() -> None:
                 env.rebuild_walls(seed=ws, wall_prob=float(cfg.wall_prob))
                 _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="train:after_rebuild_walls")
 
-            obs, _info = env.reset(seed=int(base + ep), phase=int(cfg.phase))
+            obs, _ = env.reset(seed=int(base + ep), phase=int(cfg.phase))
             _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="train:after_reset")
 
             # Recolecta pasos teacher
-            for _t in range(int(cfg.steps_per_ep)):
-                a = _teacher_action(env)
+            for _ in range(int(cfg.steps_per_ep)):
+                yield (ep, action, successes)
+
+                action = _teacher_action(env)
 
                 obs_batch.append(obs.copy())
-                act_batch.append(int(a))
+                act_batch.append(int(action))
 
-                obs, _r, done, _info = env.step(a)
+                obs, _, done, info = env.step(action)
                 step_counter += 1
 
                 # Train step cuando llenamos batch
@@ -263,7 +272,7 @@ def main() -> None:
                     X = torch.from_numpy(np.stack(obs_batch, axis=0)).to(device).float()
                     y = torch.tensor(act_batch, device=device, dtype=torch.long)
 
-                    logits, _v = model(X)
+                    logits, _ = model(X)
 
                     # ✅ action masking + sanitize igual que PPO
                     logits = mask_invalid_actions(X, logits, enable=True)
@@ -289,12 +298,12 @@ def main() -> None:
 
                     if (update_counter % max(1, int(cfg.log_every_updates))) == 0:
                         avg_loss = running_loss / float(max(1, running_n))
-                        print(
-                            f"[BC epc {epc+1}/{cfg.epochs}] updates={update_counter:5d} "
-                            f"avg_loss={avg_loss:.4f} steps_seen={step_counter}"
-                        )
+                        if verbose:
+                            print(f"[BC epc {epc+1}/{cfg.epochs}] updates={update_counter:5d} avg_loss={avg_loss:.4f} steps_seen={step_counter}")
 
                 if done:
+                    if info.get("reached", False):
+                        successes += 1
                     break
 
         # Flush batch parcial
@@ -326,20 +335,21 @@ def main() -> None:
 
         avg_loss = running_loss / float(max(1, running_n))
 
-        acc = _quick_eval_teacher_acc(
-            env=env,
-            model=model,
-            device=device,
-            phase=int(cfg.phase),
-            seed_base=99_000 + 10_000 * epc,
-            episodes=200,
-            steps_per_ep=12,
-            rebuild_walls_each_episode=bool(cfg.rebuild_walls_each_episode),
-            walls_seed_base=int(cfg.walls_seed_base),
-            wall_prob=float(cfg.wall_prob),
-            expected_max_steps=int(cfg.max_steps_env),
-        )
-        print(f"[BC epoch {epc+1}/{cfg.epochs}] done. avg_loss={avg_loss:.4f} teacher_acc={acc:.3f}")
+        if verbose:
+            acc = _quick_eval_teacher_acc(
+                env=env,
+                model=model,
+                device=device,
+                phase=int(cfg.phase),
+                seed_base=99_000 + 10_000 * epc,
+                episodes=200,
+                steps_per_ep=12,
+                rebuild_walls_each_episode=bool(cfg.rebuild_walls_each_episode),
+                walls_seed_base=int(cfg.walls_seed_base),
+                wall_prob=float(cfg.wall_prob),
+                expected_max_steps=int(cfg.max_steps_env),
+            )
+            print(f"[BC epoch {epc+1}/{cfg.epochs}] done. avg_loss={avg_loss:.4f} teacher_acc={acc:.3f}")
 
     out_path = "results/checkpoints/bc_phase1.pt"
     save_checkpoint(
@@ -359,4 +369,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    env_cfg, env, cfg = setup()
+    for _ in main(env_cfg, env, cfg, verbose=True):
+        pass

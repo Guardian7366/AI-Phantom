@@ -21,7 +21,7 @@ class StopConfig:
     min_updates_before_stop: int = 50
 
 
-def setup() -> None:
+def setup() -> tuple[MazeConfig, MazeEnv, PPOConfig]:
     set_global_seed(123)
 
     # ✅ C3: novelty OFF + shaping clamp
@@ -84,7 +84,7 @@ def setup() -> None:
     return (env_cfg, env, ppo_cfg)
 
 
-def main(env_cfg, env, ppo_cfg, verbose: bool = False):
+def main(env_cfg, env, ppo_cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
     dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
     device = dev_cfg.device
 
@@ -137,7 +137,7 @@ def main(env_cfg, env, ppo_cfg, verbose: bool = False):
         buffer.reset()
         rollout_last_done = False
         for _ in range(int(ppo_cfg.rollout_len)):
-            yield (episodes, action, best_sr)
+            yield (episodes, action, successes)
 
             obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
             out = policy.act(obs_t, deterministic=False)
