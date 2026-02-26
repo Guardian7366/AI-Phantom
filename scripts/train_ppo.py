@@ -20,7 +20,7 @@ def setup() -> tuple[MazeConfig, MazeEnv]:
         height=12,
         width=12,
         use_walls=False,
-        max_steps=128,  # ✅ Sprint 1-A: alinear con rollout_len
+        max_steps=128,
         min_manhattan=6,
         step_penalty=-0.01,
         wall_bump_penalty=-0.02,
@@ -53,7 +53,7 @@ def setup() -> tuple[MazeConfig, MazeEnv]:
 
 def main(env_cfg: MazeConfig, env: MazeEnv, verbose=False) -> iter[tuple[int, int | None, int]]:
     ppo_cfg = PPOConfig(
-        rollout_len=128,
+        rollout_len=env_cfg.max_steps,
         lr=1.0e-4,
         gamma=0.99,
         gae_lambda=0.95,
@@ -115,7 +115,7 @@ def main(env_cfg: MazeConfig, env: MazeEnv, verbose=False) -> iter[tuple[int, in
 
     eval_every = 25
     eval_episodes = 200
-    
+
     target_det_sr: float = 1.0
     consecutive_evals: int = 3
     min_updates_before_stop: int = 50

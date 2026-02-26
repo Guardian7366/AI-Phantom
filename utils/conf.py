@@ -19,6 +19,12 @@ SOUNDS_PATH = os.path.join(ASSETS_PATH, "sounds")
 IMAGES_PATH = os.path.join(ASSETS_PATH, "images")
 FONTS_PATH = os.path.join(ASSETS_PATH, "fonts")
 
+# Training checkpoints paths
+PHASE_0 = "results/checkpoints/best_phase0.pt"
+PHASE_BC = "results/checkpoints/bc_phase1.pt"
+PHASE_1 = "results/checkpoints/best_phase1.pt"
+FINAL_1 = "results/checkpoints/final_phase1.pt"
+
 # ============================================================
 
 class Config:

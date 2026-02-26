@@ -1,14 +1,25 @@
 import pygame
 import math
+import os
 
 from utils.start_menu import Button, Icon_Button, SettingsPanel
-from utils.conf import WINDOW_WIDTH, FPS, Config
+from utils.conf import WINDOW_WIDTH, FPS, Config, PHASE_0, PHASE_BC, PHASE_1, FINAL_1
 from scripts.train_ppo import main as train_ppo_main
 from scripts.train_ppo import setup as train_ppo_setup
 from scripts.pretrain_bc_phase1 import main as bc_main
 from scripts.pretrain_bc_phase1 import setup as bc_setup
 from scripts.train_phase1 import main as phase1_main
 from scripts.train_phase1 import setup as phase1_setup
+
+def restart_training():
+    if os.path.exists(PHASE_0):
+        os.remove(PHASE_0)
+    if os.path.exists(PHASE_BC):
+        os.remove(PHASE_BC)
+    if os.path.exists(PHASE_1):
+        os.remove(PHASE_1)
+    if os.path.exists(FINAL_1):
+        os.remove(FINAL_1)
 
 
 class MazeTrainingScreen:
@@ -18,7 +29,7 @@ class MazeTrainingScreen:
     - Usa SettingsState para sincronizar volúmenes y fullscreen.
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, show_start_popup=True):
         self.clock = config.clock
         self.settings = config.settings
         self.screen = config.screen
@@ -46,6 +57,16 @@ class MazeTrainingScreen:
 
         #Create buttons
         self._create_buttons()
+        #Create popups (start/end)
+        self.start_popup_rect = None
+        self.end_popup_rect = None
+        
+        #Show start popup on first run
+        if show_start_popup:
+            self._create_start_popup()
+        else:
+            self.start_training()
+
         #Compute layout
         self._recalc_layout()
 
@@ -71,15 +92,19 @@ class MazeTrainingScreen:
         self.success_num = 0
         self.episode_num = 0
 
-        if False:
+        if not os.path.exists(PHASE_0):
             self.maze_cfg, self.maze_env = train_ppo_setup()
             self.train_main = train_ppo_main(self.maze_cfg, self.maze_env, verbose=False)
-        elif False:
+        elif not os.path.exists(PHASE_BC):
             self.maze_cfg, self.maze_env = bc_setup()
             self.train_main = bc_main(self.maze_cfg, self.maze_env, verbose=False)
         else:
             self.maze_cfg, self.maze_env = phase1_setup()
             self.train_main = phase1_main(self.maze_cfg, self.maze_env, verbose=False)
+
+    def start_training(self):
+        self.playing = True
+        self.start_popup_rect = None
 
     # ----------------------
     # CREATION & LAYOUT
@@ -91,6 +116,26 @@ class MazeTrainingScreen:
         #Play bbutton
         self.btn_play = Button((0, 0, 200, 60), "PLAY", self.font_button, (40, 120, 40), (60, 160, 60), click_sound=self.click_sound)
         self.btn_ff = Button((0, 0, 120, 44), "x1", self.font_button, (60, 60, 90), (100, 100, 140), click_sound=self.click_sound)
+
+    def _create_start_popup(self):
+        width, height = self.screen.get_size()
+        self.start_popup_rect = pygame.Rect(width * 0.1, height * 0.3, width * 0.8, height * 0.3)
+        #Start button
+        self.btn_start = Button((0, 0, 200, 50), "START", self.font_button, (60, 132, 194), (95, 154, 206), click_sound=self.click_sound)
+        self.btn_start.rect.center = (width // 2 + self.start_popup_rect.width // 4, height // 2 + 10)
+        #Restart button
+        self.btn_restart = Button((0, 0, 220, 50), "RESTART", self.font_button, (60, 132, 194), (95, 154, 206), click_sound=self.click_sound)
+        self.btn_restart.rect.center = (width // 2 - self.start_popup_rect.width // 4, height // 2 + 10)
+
+    def _create_end_popup(self):
+        width, height = self.screen.get_size()
+        self.end_popup_rect = pygame.Rect(width * 0.1, height * 0.3, width * 0.8, height * 0.3)
+        #Continue Training button
+        self.btn_continue = Button((0, 0, 240, 50), "CONTINUE", self.font_button, (60, 132, 194), (95, 154, 206), click_sound=self.click_sound)
+        self.btn_continue.rect.center = (width // 2 - self.end_popup_rect.width // 4, height // 2 + 10)
+        #Exit Training button
+        self.btn_exit = Button((0, 0, 180, 50), "EXIT", self.font_button, (60, 60, 90), (90, 90, 140), click_sound=self.click_sound)
+        self.btn_exit.rect.center = (width // 2 + self.end_popup_rect.width // 4, height // 2 + 10)
 
     def _recalc_layout(self):
         width, height = self.screen.get_size()
@@ -207,12 +252,62 @@ class MazeTrainingScreen:
         else:
             self.btn_play.text = "PAUSE" if self.playing else "PLAY"
             self.btn_ff.text = f"x{self.speeds[self.speed_index]}"
+    
+    def _draw_popup_start(self):
+        mouse_pos = pygame.mouse.get_pos()
+        #Recuadro de pop up
+        pygame.draw.rect(self.screen, (16, 18, 26), self.start_popup_rect)
+        pygame.draw.rect(self.screen, (120, 120, 120), self.start_popup_rect, 2)
+        #Aviso/Pregunta para empezar
+        start_text = self.font_button.render("Begin Training?", False, (255, 255, 255))
+        rectST = start_text.get_rect(center=self.start_popup_rect.center + pygame.Vector2(0, -20))
+        self.screen.blit(start_text, rectST)
+        #Boton de Start
+        self.btn_start.update(mouse_pos)
+        self.btn_start.draw(self.screen)
+        #Boton de Restart
+        self.btn_restart.update(mouse_pos)
+        self.btn_restart.draw(self.screen)
+
+    def _draw_popup_endtrain(self):
+        mouse_pos = pygame.mouse.get_pos()
+        #Recuadro de pop up
+        pygame.draw.rect(self.screen, (16, 18, 26), self.end_popup_rect)
+        pygame.draw.rect(self.screen, (120, 120, 120), self.end_popup_rect, 2)
+        #Aviso de fin
+        end_text = self.font_button.render("Training Finished", False, (255, 255, 255))
+        rectET = end_text.get_rect(center=self.end_popup_rect.center + pygame.Vector2(0, -20))
+        self.screen.blit(end_text, rectET)
+        #Boton de Continue
+        self.btn_continue.update(mouse_pos)
+        self.btn_continue.draw(self.screen)
+        #Boton de Exit
+        self.btn_exit.update(mouse_pos)
+        self.btn_exit.draw(self.screen)
 
     # ----------------------------------
     # ELEMENT INTERACTION
     # ----------------------------------
     def _handle_control_click(self, event):
         if event.type != pygame.MOUSEBUTTONDOWN:
+            return None
+
+        if self.start_popup_rect:
+            if self.btn_start.is_clicked(event):
+                self.start_training()
+                return None
+            if self.btn_restart.is_clicked(event):
+                restart_training()
+                return "maze_train"
+            return None
+
+        if self.end_popup_rect:
+            if self.btn_exit.is_clicked(event):
+                self.end_popup_rect = None
+                return "selection"
+            if self.btn_continue.is_clicked(event):
+                self.end_popup_rect = None
+                return "maze_train"
             return None
 
         if self.btn_back.is_clicked(event):
@@ -264,6 +359,7 @@ class MazeTrainingScreen:
                 self.ended = True
                 self.playing = False
                 self.current_action = "idle"
+                self._create_end_popup()
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -279,8 +375,8 @@ class MazeTrainingScreen:
                 else:
                     #Interaction
                     res = self._handle_control_click(event)
-                    if res == "selection":
-                        return "selection"
+                    if res is not None:
+                        return res
 
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         return "selection"
@@ -297,6 +393,11 @@ class MazeTrainingScreen:
             self._draw_maze_area()
             self._draw_stats_area()
             self._draw_controls()
+
+            if self.start_popup_rect:
+                self._draw_popup_start()
+            if self.end_popup_rect:
+                self._draw_popup_endtrain()
 
             if self.show_settings:
                 overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
