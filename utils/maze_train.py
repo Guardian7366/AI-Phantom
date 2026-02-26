@@ -7,6 +7,8 @@ from scripts.train_ppo import main as train_ppo_main
 from scripts.train_ppo import setup as train_ppo_setup
 from scripts.pretrain_bc_phase1 import main as bc_main
 from scripts.pretrain_bc_phase1 import setup as bc_setup
+from scripts.train_phase1 import main as phase1_main
+from scripts.train_phase1 import setup as phase1_setup
 
 
 class MazeTrainingScreen:
@@ -69,12 +71,15 @@ class MazeTrainingScreen:
         self.success_num = 0
         self.episode_num = 0
 
-        if True:
-            self.maze_cfg, self.maze_env, ppo_cfg = train_ppo_setup()
-            self.train_main = train_ppo_main(self.maze_cfg, self.maze_env, ppo_cfg, verbose=False)
+        if False:
+            self.maze_cfg, self.maze_env = train_ppo_setup()
+            self.train_main = train_ppo_main(self.maze_cfg, self.maze_env, verbose=False)
+        elif False:
+            self.maze_cfg, self.maze_env = bc_setup()
+            self.train_main = bc_main(self.maze_cfg, self.maze_env, verbose=False)
         else:
-            self.maze_cfg, self.maze_env, bc_cfg = bc_setup()
-            self.train_main = bc_main(self.maze_cfg, self.maze_env, bc_cfg, verbose=False)
+            self.maze_cfg, self.maze_env = phase1_setup()
+            self.train_main = phase1_main(self.maze_cfg, self.maze_env, verbose=False)
 
     # ----------------------
     # CREATION & LAYOUT

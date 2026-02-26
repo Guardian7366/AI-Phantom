@@ -3,8 +3,6 @@ from __future__ import annotations
 from ai_phantom.core.horizon import sync_horizon
 
 import os
-from dataclasses import dataclass
-
 import torch
 
 from ai_phantom.core import select_device, set_global_seed, save_checkpoint, safe_torch_compile
@@ -14,14 +12,7 @@ from ai_phantom.agents.ppo.buffer import RolloutBuffer
 from ai_phantom.controllers import EvalController, EvalConfig
 
 
-@dataclass
-class StopConfig:
-    target_det_sr: float = 1.0
-    consecutive_evals: int = 3
-    min_updates_before_stop: int = 50
-
-
-def setup() -> tuple[MazeConfig, MazeEnv, PPOConfig]:
+def setup() -> tuple[MazeConfig, MazeEnv]:
     set_global_seed(123)
 
     # ✅ C3: novelty OFF + shaping clamp
@@ -54,6 +45,13 @@ def setup() -> tuple[MazeConfig, MazeEnv, PPOConfig]:
         terminate_on_loop=False,
     )
 
+    env = MazeEnv(env_cfg, seed=0)
+
+    # Pass the maze cfg and env
+    return (env_cfg, env)
+
+
+def main(env_cfg: MazeConfig, env: MazeEnv, verbose=False) -> iter[tuple[int, int | None, int]]:
     ppo_cfg = PPOConfig(
         rollout_len=128,
         lr=1.0e-4,
@@ -78,13 +76,6 @@ def setup() -> tuple[MazeConfig, MazeEnv, PPOConfig]:
     # ✅ A2: alinear gamma de shaping potencial con PPO
     env_cfg.potential_gamma = float(ppo_cfg.gamma)
     
-    env = MazeEnv(env_cfg, seed=0)
-
-    # Pass the maze cfg and env
-    return (env_cfg, env, ppo_cfg)
-
-
-def main(env_cfg, env, ppo_cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
     dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
     device = dev_cfg.device
 
@@ -124,8 +115,10 @@ def main(env_cfg, env, ppo_cfg, verbose=False) -> iter[tuple[int, int | None, in
 
     eval_every = 25
     eval_episodes = 200
-
-    stop_cfg = StopConfig()
+    
+    target_det_sr: float = 1.0
+    consecutive_evals: int = 3
+    min_updates_before_stop: int = 50
     good_eval_streak = 0
 
     obs, info = env.reset(seed=train_seed_base, phase=phase)
@@ -212,24 +205,23 @@ def main(env_cfg, env, ppo_cfg, verbose=False) -> iter[tuple[int, int | None, in
                     extra={
                         "phase": phase,
                         "obs_shape": obs_shape,
-                        "best_eval_sr_det": best_sr,
-                        "ppo_cfg": ppo_cfg.__dict__,
                         "env_cfg": env_cfg.__dict__,
+                        "ppo_cfg": ppo_cfg.__dict__,
                     },
                 )
                 print(f"   ✅ Saved BEST checkpoint: {best_path} (SR={best_sr:.3f})")
 
-            if float(ev_det["sr"]) >= float(stop_cfg.target_det_sr) - 1e-12:
+            if float(ev_det["sr"]) >= target_det_sr - 1e-12:
                 good_eval_streak += 1
             else:
                 good_eval_streak = 0
 
-            if update_idx >= int(stop_cfg.min_updates_before_stop) and good_eval_streak >= int(stop_cfg.consecutive_evals):
-                print(f"   🏁 Early-stop: detSR={ev_det['sr']:.3f} for {good_eval_streak} evals (updates >= {stop_cfg.min_updates_before_stop}).")
+            if update_idx >= min_updates_before_stop and good_eval_streak >= consecutive_evals:
+                print(f"   🏁 Early-stop: detSR={ev_det['sr']:.3f} for {good_eval_streak} evals (updates >= {min_updates_before_stop}).")
                 break
 
 
 if __name__ == "__main__":
-    env_cfg, env, ppo_cfg = setup()
-    for _ in main(env_cfg, env, ppo_cfg, verbose=True):
+    env_cfg, env = setup()
+    for _ in main(env_cfg, env, verbose=True):
         pass

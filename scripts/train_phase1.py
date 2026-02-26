@@ -5,7 +5,6 @@ import os
 import time
 import random
 from collections import deque
-from typing import Optional
 
 import numpy as np
 import torch
@@ -37,6 +36,16 @@ STOP_ON_PPO_SR = True
 STOP_PPO_SR = 0.95
 STOP_PPO_STREAK_N = 2          # evaluaciones seguidas requeridas
 STOP_SAVE_PATH = "results/checkpoints/final_phase1.pt"
+WALLS_SEED = 777
+
+# ------------------------------
+# Curriculum: stages de wall_prob
+# (Sprint 1: gate por validación)
+# ------------------------------
+NUM_WALL_STAGES = 8
+WALL_P_START = 0.02
+WALL_P_FINAL = 0.18
+
 
 def linear_schedule(start: float, end: float, t: float) -> float:
     t = float(max(0.0, min(1.0, t)))
@@ -149,7 +158,7 @@ def policy_logp_of_action(
     action: int,
     enable_mask: bool = True,
 ) -> float:
-    logits, _v = trainer.model(obs_t)
+    logits, _ = trainer.model(obs_t)
 
     logits = mask_invalid_actions(
     obs_t,
@@ -175,55 +184,19 @@ def policy_logp_of_action(
 
 @torch.no_grad()
 def policy_value(trainer: PPOTrainer, obs_t: torch.Tensor) -> float:
-    _logits, v_t = trainer.model(obs_t)
+    _, v_t = trainer.model(obs_t)
     if v_t.dim() == 2 and v_t.size(-1) == 1:
         v_t = v_t.squeeze(-1)
     v = v_t.item()
     return float(v) if np.isfinite(v) else 0.0
 
-def main() -> None:
-    set_global_seed(123)
 
-    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
-    device = dev_cfg.device
-    print("Device:", device)
-
-    os.makedirs("results/checkpoints", exist_ok=True)
-
-    logger = RunLogger.create(base_dir="results/runs", run_name="phase1")
-    print(f"📝 Logging -> {logger.run_dir}")
-
-    WALLS_SEED = 777
-
-    # ------------------------------
-    # Curriculum: stages de wall_prob
-    # (Sprint 1: gate por validación)
-    # ------------------------------
-    num_wall_stages = 8
-    wall_p_start = 0.02
-    wall_p_final = 0.18
-
-    # ------------------------------
-    # ✅ Hard interleaving (reduce distribution shift)
-    # ------------------------------
-    hard_wp = float(wall_p_final)  # 0.18
-
-    def hard_frac_for_stage(stage: int) -> float:
-        # Queremos que el PPO entrene FUERTE en el target (wp=0.180) desde stage 0,
-        # porque el test oficial es ahí. Aumentamos hard_frac temprano.
-        if stage <= 0:
-            return 0.70
-        if stage <= 1:
-            return 0.75
-        if stage <= 3:
-            return 0.80
-        return 0.85
-
+def setup() -> tuple[MazeConfig, MazeEnv]:
     env_cfg = MazeConfig(
         height=12,
         width=12,
         use_walls=True,
-        wall_prob=float(wall_p_final),  # target final (para TEST)
+        wall_prob=float(WALL_P_FINAL),  # target final (para TEST)
         max_steps=256,
         min_manhattan=6,
         step_penalty=-0.01,
@@ -261,8 +234,36 @@ def main() -> None:
         loop_terminate_visits=0,
         loop_penalty=0.0,
     )
-
     train_env = MazeEnv(env_cfg, seed=WALLS_SEED)
+
+    return env_cfg, train_env
+
+
+def main(env_cfg: MazeConfig, train_env: MazeEnv, verbose=False) -> iter[tuple[int, int | None, int]]:
+    set_global_seed(123)
+
+    dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
+    device = dev_cfg.device
+
+    os.makedirs("results/checkpoints", exist_ok=True)
+
+    logger = RunLogger.create(base_dir="results/runs", run_name="phase1")
+
+    # ------------------------------
+    # ✅ Hard interleaving (reduce distribution shift)
+    # ------------------------------
+    hard_wp = float(WALL_P_FINAL)  # 0.18
+
+    def hard_frac_for_stage(stage: int) -> float:
+        # Queremos que el PPO entrene FUERTE en el target (wp=0.180) desde stage 0,
+        # porque el test oficial es ahí. Aumentamos hard_frac temprano.
+        if stage <= 0:
+            return 0.70
+        if stage <= 1:
+            return 0.75
+        if stage <= 3:
+            return 0.80
+        return 0.85
 
     # Eval env: también con walls, pero se re-build por episodio (multi-walls)
     eval_env_cfg = MazeConfig(**env_cfg.__dict__)
@@ -270,9 +271,6 @@ def main() -> None:
 
     obs0, _ = train_env.reset(seed=0, phase=1)
     obs_shape = tuple(obs0.shape)
-    print(
-        f"Obs shape: {obs_shape} (C={obs_shape[0]}) | dist_channel={train_env.cfg.include_dist_channel}"
-    )
 
     model = CnnActorCritic(obs_shape=obs_shape, num_actions=4)
 
@@ -369,7 +367,8 @@ def main() -> None:
             map_location=device,
             restore_rng=False,
         )
-        print(f"Loaded warm-start checkpoint: {ckpt0}")
+        if verbose:
+            print(f"Loaded warm-start checkpoint: {ckpt0}")
 
     best_path = "results/checkpoints/best_phase1.pt"  # ✅ siempre definido
 
@@ -383,7 +382,8 @@ def main() -> None:
             map_location=device,
             restore_rng=False,
         )
-        print(f"Loaded BC warm-start checkpoint: {bc_ckpt}")
+        if verbose:
+            print(f"Loaded BC warm-start checkpoint: {bc_ckpt}")
 
     # ------------------------------
     # Eval sizes (FAST vs TEST)
@@ -415,7 +415,7 @@ def main() -> None:
                 deterministic=True,
                 rebuild_walls_each_episode=True,
                 walls_seed_base=WALLS_SEED + 900_000,
-                wall_prob=float(wall_p_final),
+                wall_prob=float(WALL_P_FINAL),
                 hybrid=False,
             )
         )
@@ -429,7 +429,7 @@ def main() -> None:
                 deterministic=True,
                 rebuild_walls_each_episode=True,
                 walls_seed_base=WALLS_SEED + 900_000,
-                wall_prob=float(wall_p_final),
+                wall_prob=float(WALL_P_FINAL),
                 hybrid=True,
                 hybrid_min_conf=0.55,
             )
@@ -444,17 +444,18 @@ def main() -> None:
                 deterministic=True,
                 rebuild_walls_each_episode=True,
                 walls_seed_base=WALLS_SEED + 950_000,
-                wall_prob=float(wall_p_final),
+                wall_prob=float(WALL_P_FINAL),
                 hybrid=True,
                 hybrid_min_conf=0.55,
             )
         )
 
-        print(
-            f"✅ EVAL-ONLY RESULTS | PPO SR={test_ppo['sr']:.3f} avg_steps={test_ppo['avg_steps']:.1f} | "
-            f"HYBRID_A SR={test_h['sr']:.3f} bfs_rate={test_h.get('bfs_rate', 0.0):.3f} | "
-            f"HYBRID_B SR={test_b_h['sr']:.3f} bfs_rate={test_b_h.get('bfs_rate', 0.0):.3f}"
-        )
+        if verbose:
+            print(
+                f"✅ EVAL-ONLY RESULTS | PPO SR={test_ppo['sr']:.3f} avg_steps={test_ppo['avg_steps']:.1f} | "
+                f"HYBRID_A SR={test_h['sr']:.3f} bfs_rate={test_h.get('bfs_rate', 0.0):.3f} | "
+                f"HYBRID_B SR={test_b_h['sr']:.3f} bfs_rate={test_b_h.get('bfs_rate', 0.0):.3f}"
+            )
         return
 
     # ✅ Sprint 2 (C): límites para que el teacher nunca domine
@@ -471,7 +472,8 @@ def main() -> None:
     # ✅ Resume real desde best_phase1.pt (B1)
     # ------------------------------
     if os.path.exists(best_path):
-        print(f"🔁 Resuming Phase1 from {best_path}")
+        if verbose:
+            print(f"🔁 Resuming Phase1 from {best_path}")
 
         extra = load_checkpoint(
             best_path,
@@ -493,7 +495,7 @@ def main() -> None:
         cur_wall_prob = float(
             extra.get(
                 "cur_wall_prob",
-                wall_prob_for_stage(cur_stage, num_wall_stages, wall_p_start, wall_p_final),
+                wall_prob_for_stage(cur_stage, NUM_WALL_STAGES, WALL_P_START, WALL_P_FINAL),
             )
         )
 
@@ -530,11 +532,8 @@ def main() -> None:
         reset_seed = episode_reset_seed_base + episodes
         obs, info = train_env.reset(seed=int(reset_seed), phase=1)
 
-        print(
-            f"   🔄 Restored stage={cur_stage} "
-            f"wall_prob={cur_wall_prob:.3f} "
-            f"best_test={best_test_sr_final:.3f}"
-        )
+        if verbose:
+            print(f"   🔄 Restored stage={cur_stage} wall_prob={cur_wall_prob:.3f} best_test={best_test_sr_final:.3f}")
 
         resumed = True
 
@@ -618,13 +617,13 @@ def main() -> None:
     # ✅ Sprint 1 - Gate por validación (VAL_FAST)
     # ------------------------------
     stage_thresholds = [0.35, 0.45, 0.55, 0.70, 0.82, 0.92, 0.96, 0.98]  # len == 8
-    if len(stage_thresholds) != int(num_wall_stages):
-        raise RuntimeError("stage_thresholds debe tener el mismo largo que num_wall_stages.")
+    if len(stage_thresholds) != int(NUM_WALL_STAGES):
+        raise RuntimeError("stage_thresholds debe tener el mismo largo que NUM_WALL_STAGES.")
 
     # ✅ requerimiento mínimo de TEST_FINAL para promover (sube con stage)
     stage_test_min = [0.55, 0.58, 0.65, 0.70, 0.82, 0.90, 0.95, 0.97]
-    if len(stage_test_min) != int(num_wall_stages):
-        raise RuntimeError("stage_test_min debe tener el mismo largo que num_wall_stages.")
+    if len(stage_test_min) != int(NUM_WALL_STAGES):
+        raise RuntimeError("stage_test_min debe tener el mismo largo que NUM_WALL_STAGES.")
 
     need_k = 2
     good_streak = 0 if not resumed else good_streak
@@ -638,6 +637,9 @@ def main() -> None:
     stage_teacher_boost = 1.6
     stage_guard_boost = 1.4
 
+    recent = deque(maxlen=200)
+    recent_clean = deque(maxlen=200)
+
     # ------------------------------
     # Runtime stats
     # ------------------------------
@@ -648,12 +650,8 @@ def main() -> None:
         rescue_used_total = 0
         episode_wall_counter = 0
 
-    recent = deque(maxlen=200)
-    recent_clean = deque(maxlen=200)
-
-    if not resumed:
         cur_stage = 0
-        cur_wall_prob = wall_prob_for_stage(cur_stage, num_wall_stages, wall_p_start, wall_p_final)
+        cur_wall_prob = wall_prob_for_stage(cur_stage, NUM_WALL_STAGES, WALL_P_START, WALL_P_FINAL)
 
         episode_wall_counter = 0
         train_env.rebuild_walls(
@@ -664,12 +662,8 @@ def main() -> None:
         init_seed = episode_reset_seed_base + episodes
         obs, info = train_env.reset(seed=int(init_seed), phase=1)
 
-        print(f"🧱 init: stage={cur_stage}/{num_wall_stages-1} wall_prob={cur_wall_prob:.3f}")
-    else:
-        print(
-            f"🧱 resume: stage={cur_stage}/{num_wall_stages-1} wall_prob={cur_wall_prob:.3f} "
-            f"best_test={best_test_sr_final:.3f}"
-        )
+        if verbose:
+            print(f"🧱 init: stage={cur_stage}/{NUM_WALL_STAGES-1} wall_prob={cur_wall_prob:.3f}")
 
     last_ep_wp = float(cur_wall_prob)
     hard_ep_recent = deque(maxlen=200)  # 1 si episodio fue hard_wp
@@ -828,7 +822,7 @@ def main() -> None:
 
             ep_used_rescue = False
 
-            for _t in range(int(ppo_cfg.rollout_len)):
+            for _ in range(int(ppo_cfg.rollout_len)):
                 obs_t = torch.from_numpy(obs).unsqueeze(0).to(device).float()
 
                 out = policy.act(obs_t, deterministic=False)
@@ -891,6 +885,7 @@ def main() -> None:
                         rescue_used_total += 1
 
                 next_obs, r, done, info = train_env.step(a_used)
+                yield (episodes, a_used, successes)
 
                 # ✅ Recovery trigger por señales REALES del env
                 if not done:
@@ -1051,26 +1046,27 @@ def main() -> None:
             wall_prob_episode = float(last_ep_wp)
             hard_rate200 = (sum(hard_ep_recent) / len(hard_ep_recent)) if len(hard_ep_recent) > 0 else 0.0
 
-            print(
-                f"[UPD {upd:04d}] ep={episodes:5d} SR={train_sr:.3f} win200={win_sr:.3f} loopRate80={loop_rate80:.3f} cleanSR={clean_sr:.3f} "
-                f"mh={train_env.cfg.min_manhattan:2d} wp_stage={cur_wall_prob:.3f} wp_ep={last_ep_wp:.3f} stage={cur_stage} "
-                f"mix={teacher_mix:.3f} guard={guard_prob:.3f} adapt={adapt_mult:.2f} boostLeft={stage_transition_boost_updates:2d} "
-                f"capT={max_teacher_steps_total:3d} capM={max_teacher_steps_mix:3d} capG={max_teacher_steps_guard:3d}/{ppo_cfg.rollout_len} "
-                f"usedT={used_teacher_mix + used_teacher_guard:3d} (mix={used_teacher_mix:3d},guard={used_teacher_guard:3d}) "
-                f"rescueRate={rescue_rate:.3f} "
-                f"lr={metrics.get('lr', trainer.optim.param_groups[0]['lr']):.2e} "
-                f"clip={metrics.get('clip', trainer.cfg.clip_range):.3f} "
-                f"kl_ema={metrics.get('kl_ema', 0.0):.5f} "
-                f"tKL={trainer.cfg.target_kl:.3f} esMult={trainer.cfg.early_stop_kl_mult:.2f} "
-                f"esThr={(trainer.cfg.target_kl * trainer.cfg.early_stop_kl_mult):.5f} "
-                f"entCoef={trainer.cfg.ent_coef:.5f} "
-                f"pi={metrics['pi_loss']:.4f} vf={metrics['vf_loss']:.4f} ev={metrics['explained_var']:.3f} "
-                f"ent={metrics['entropy']:.4f} |KL|={metrics['approx_kl']:.5f} stop={int(metrics['early_stop'])} "
-                f"nan={int(metrics.get('nan_abort', 0.0) > 0.5)} "
-                f"fail(loop={loop_rate80:.2f},to={timeout_rate:.2f},other={other_rate:.2f}) "
-                f"loops(st={stagn_rate:.2f},osc={osc_rate:.2f},sh={short_rate:.2f},avgHits={avg_loop_hits:.2f})"
-                f"hard200={hard_rate200:.2f} "
-            )
+            if verbose:
+                print(
+                    f"[UPD {upd:04d}] ep={episodes:5d} SR={train_sr:.3f} win200={win_sr:.3f} loopRate80={loop_rate80:.3f} cleanSR={clean_sr:.3f} "
+                    f"mh={train_env.cfg.min_manhattan:2d} wp_stage={cur_wall_prob:.3f} wp_ep={last_ep_wp:.3f} stage={cur_stage} "
+                    f"mix={teacher_mix:.3f} guard={guard_prob:.3f} adapt={adapt_mult:.2f} boostLeft={stage_transition_boost_updates:2d} "
+                    f"capT={max_teacher_steps_total:3d} capM={max_teacher_steps_mix:3d} capG={max_teacher_steps_guard:3d}/{ppo_cfg.rollout_len} "
+                    f"usedT={used_teacher_mix + used_teacher_guard:3d} (mix={used_teacher_mix:3d},guard={used_teacher_guard:3d}) "
+                    f"rescueRate={rescue_rate:.3f} "
+                    f"lr={metrics.get('lr', trainer.optim.param_groups[0]['lr']):.2e} "
+                    f"clip={metrics.get('clip', trainer.cfg.clip_range):.3f} "
+                    f"kl_ema={metrics.get('kl_ema', 0.0):.5f} "
+                    f"tKL={trainer.cfg.target_kl:.3f} esMult={trainer.cfg.early_stop_kl_mult:.2f} "
+                    f"esThr={(trainer.cfg.target_kl * trainer.cfg.early_stop_kl_mult):.5f} "
+                    f"entCoef={trainer.cfg.ent_coef:.5f} "
+                    f"pi={metrics['pi_loss']:.4f} vf={metrics['vf_loss']:.4f} ev={metrics['explained_var']:.3f} "
+                    f"ent={metrics['entropy']:.4f} |KL|={metrics['approx_kl']:.5f} stop={int(metrics['early_stop'])} "
+                    f"nan={int(metrics.get('nan_abort', 0.0) > 0.5)} "
+                    f"fail(loop={loop_rate80:.2f},to={timeout_rate:.2f},other={other_rate:.2f}) "
+                    f"loops(st={stagn_rate:.2f},osc={osc_rate:.2f},sh={short_rate:.2f},avgHits={avg_loop_hits:.2f})"
+                    f"hard200={hard_rate200:.2f} "
+                )
 
             logger.log(
                 {
@@ -1142,7 +1138,7 @@ def main() -> None:
                         deterministic=True,
                         rebuild_walls_each_episode=True,
                         walls_seed_base=WALLS_SEED + 900_000,
-                        wall_prob=float(wall_p_final),
+                        wall_prob=float(WALL_P_FINAL),
                         hybrid=False,  # ✅ PPO puro
                     )
                 )
@@ -1155,7 +1151,7 @@ def main() -> None:
                         deterministic=True,
                         rebuild_walls_each_episode=True,
                         walls_seed_base=WALLS_SEED + 900_000,
-                        wall_prob=float(wall_p_final),
+                        wall_prob=float(WALL_P_FINAL),
                         hybrid=True,
                         hybrid_min_conf=0.55,
                     )
@@ -1169,7 +1165,7 @@ def main() -> None:
                         deterministic=True,
                         rebuild_walls_each_episode=True,
                         walls_seed_base=WALLS_SEED + 950_000,
-                        wall_prob=float(wall_p_final),
+                        wall_prob=float(WALL_P_FINAL),
                         hybrid=True,
                         hybrid_min_conf=0.55,
                     )
@@ -1188,7 +1184,7 @@ def main() -> None:
                     bad_gate_streak += 1
                     promote_hold = 0  # ✅ si no pasamos gate, no acumulamos paciencia de promoción
 
-                is_final_stage = (cur_stage >= (num_wall_stages - 1))
+                is_final_stage = (cur_stage >= (NUM_WALL_STAGES - 1))
 
                 # ✅ Rollback por colapso prolongado
                 if (rollback_enable
@@ -1196,14 +1192,14 @@ def main() -> None:
                         and (not pass_gate)
                         and (bad_gate_streak >= int(rollback_bad_streak))
                         and (cur_stage > 0)
-                    ):
+                ):
                     old_stage = cur_stage
                     cur_stage -= 1
                     promote_hold = 0  # ✅ reset hold al hacer rollback
                     good_streak = 0
                     bad_gate_streak = 0
 
-                    cur_wall_prob = wall_prob_for_stage(cur_stage, num_wall_stages, wall_p_start, wall_p_final)
+                    cur_wall_prob = wall_prob_for_stage(cur_stage, NUM_WALL_STAGES, WALL_P_START, WALL_P_FINAL)
 
                     # ✅ Anti-regresión: restaurar mejor checkpoint conocido
                     if os.path.exists(best_path):
@@ -1215,7 +1211,8 @@ def main() -> None:
                             restore_rng=False,
                         )
                         move_optimizer_state_to_device_(trainer.optim, device)
-                        print(f"🧯 Restored BEST checkpoint after rollback: {best_path}")
+                        if verbose:
+                            print(f"🧯 Restored BEST checkpoint after rollback: {best_path}")
 
                         loop_term_recent.clear()
                         fail_recent.clear()
@@ -1241,27 +1238,29 @@ def main() -> None:
 
                     stage_transition_boost_updates = int(stage_boost_len)
 
-                    print(f"🧯 ROLLBACK: stage {old_stage} -> {cur_stage} | wall_prob={cur_wall_prob:.3f}")
+                    if verbose:
+                        print(f"🧯 ROLLBACK: stage {old_stage} -> {cur_stage} | wall_prob={cur_wall_prob:.3f}")
 
-                print(
-                    f"   VAL_FAST(stage={cur_stage} wp={cur_wall_prob:.3f}): SR={val['sr']:.3f} "
-                    f"avg_steps={val['avg_steps']:.1f} | gate: need SR>={thresh:.2f} streak={good_streak}/{need_k} "
-                    f"| badGate={bad_gate_streak}"
-                )
-                print(
-                    f"   TEST_FINAL_HYBRID(wp={wall_p_final:.3f}): SR={test_h['sr']:.3f} avg_steps={test_h['avg_steps']:.1f} "
-                    f"bfs_rate={test_h.get('bfs_rate', 0.0):.3f} "
-                    f"bfs_try={test_h.get('bfs_try_steps', 0)} fail={test_h.get('bfs_fail_steps', 0)} "
-                    f"(best_test={best_test_sr_final:.3f})"
-                )
-                print(
-                    f"   TEST_B_HYBRID(wp={wall_p_final:.3f}): SR={test_b_h['sr']:.3f} avg_steps={test_b_h['avg_steps']:.1f} "
-                    f"bfs_rate={test_b_h.get('bfs_rate', 0.0):.3f} "
-                    f"bfs_try={test_b_h.get('bfs_try_steps', 0)} fail={test_b_h.get('bfs_fail_steps', 0)}"
-                )
-                print(
-                    f"   TEST_FINAL_PPO(wp={wall_p_final:.3f}): SR={test_ppo['sr']:.3f} avg_steps={test_ppo['avg_steps']:.1f}"
-                )
+                if verbose:
+                    print(
+                        f"   VAL_FAST(stage={cur_stage} wp={cur_wall_prob:.3f}): SR={val['sr']:.3f} "
+                        f"avg_steps={val['avg_steps']:.1f} | gate: need SR>={thresh:.2f} streak={good_streak}/{need_k} "
+                        f"| badGate={bad_gate_streak}"
+                    )
+                    print(
+                        f"   TEST_FINAL_HYBRID(wp={WALL_P_FINAL:.3f}): SR={test_h['sr']:.3f} avg_steps={test_h['avg_steps']:.1f} "
+                        f"bfs_rate={test_h.get('bfs_rate', 0.0):.3f} "
+                        f"bfs_try={test_h.get('bfs_try_steps', 0)} fail={test_h.get('bfs_fail_steps', 0)} "
+                        f"(best_test={best_test_sr_final:.3f})"
+                    )
+                    print(
+                        f"   TEST_B_HYBRID(wp={WALL_P_FINAL:.3f}): SR={test_b_h['sr']:.3f} avg_steps={test_b_h['avg_steps']:.1f} "
+                        f"bfs_rate={test_b_h.get('bfs_rate', 0.0):.3f} "
+                        f"bfs_try={test_b_h.get('bfs_try_steps', 0)} fail={test_b_h.get('bfs_fail_steps', 0)}"
+                    )
+                    print(
+                        f"   TEST_FINAL_PPO(wp={WALL_P_FINAL:.3f}): SR={test_ppo['sr']:.3f} avg_steps={test_ppo['avg_steps']:.1f}"
+                    )
 
                 # --- Métricas oficiales separadas ---
                 min_test_hybrid = min(float(test_h["sr"]), float(test_b_h["sr"]))
@@ -1312,9 +1311,9 @@ def main() -> None:
                                 "need_k": int(need_k),
                                 "bad_gate_streak": int(bad_gate_streak),
                                 "walls_seed": int(WALLS_SEED),
-                                "num_wall_stages": int(num_wall_stages),
-                                "wall_p_start": float(wall_p_start),
-                                "wall_p_final": float(wall_p_final),
+                                "NUM_WALL_STAGES": int(NUM_WALL_STAGES),
+                                "WALL_P_START": float(WALL_P_START),
+                                "wall_p_final": float(WALL_P_FINAL),
                                 "ppo_cfg": ppo_cfg.__dict__,
                                 "env_cfg": env_cfg.__dict__,
                                 "teacher_mix_max": float(teacher_mix_max),
@@ -1332,11 +1331,12 @@ def main() -> None:
                             save_rng=True,
                         )
 
-                        print(
-                            f"✅ AUTO-STOP: TEST_FINAL_PPO SR={sr_test_ppo:.3f} "
-                            f">= {STOP_PPO_SR:.2f} for {stop_sr_streak}/{STOP_PPO_STREAK_N} evals. "
-                            f"Saved: {STOP_SAVE_PATH}"
-                        )
+                        if verbose:
+                            print(
+                                f"✅ AUTO-STOP: TEST_FINAL_PPO SR={sr_test_ppo:.3f} "
+                                f">= {STOP_PPO_SR:.2f} for {stop_sr_streak}/{STOP_PPO_STREAK_N} evals. "
+                                f"Saved: {STOP_SAVE_PATH}"
+                            )
 
                         # ---- RESTORE RNG (igual que al final del eval) ----
                         random.setstate(py_state)
@@ -1387,11 +1387,12 @@ def main() -> None:
                         trainer._set_lr_clamped(trainer._get_lr() * 0.75)
                         trainer._set_clip_clamped(float(trainer.cfg.clip_range) * 0.90)
 
-                        print(
-                            f"🛡️ TEST DROP real: sr_official={min_test_sr_official:.3f} "
-                            f"< prev_best={prev_best:.3f} - {test_drop_margin:.2f} "
-                            f"(streak={test_drop_streak})"
-                        )
+                        if verbose:
+                            print(
+                                f"🛡️ TEST DROP real: sr_official={min_test_sr_official:.3f} "
+                                f"< prev_best={prev_best:.3f} - {test_drop_margin:.2f} "
+                                f"(streak={test_drop_streak})"
+                            )
                     else:
                         test_drop_streak = 0
 
@@ -1409,7 +1410,8 @@ def main() -> None:
                     trainer._set_lr_clamped(trainer._get_lr() * 0.85)
                     trainer._set_clip_clamped(float(trainer.cfg.clip_range) * 0.95)
 
-                    print(f"🧯 Restored BEST due to persistent TEST drop: {best_path}")
+                    if verbose:
+                        print(f"🧯 Restored BEST due to persistent TEST drop: {best_path}")
 
                     loop_term_recent.clear()
                     fail_recent.clear()
@@ -1455,9 +1457,9 @@ def main() -> None:
                             "stage_test_min": list(stage_test_min),
                             "bad_gate_streak": int(bad_gate_streak),
                             "walls_seed": int(WALLS_SEED),
-                            "num_wall_stages": int(num_wall_stages),
-                            "wall_p_start": float(wall_p_start),
-                            "wall_p_final": float(wall_p_final),
+                            "NUM_WALL_STAGES": int(NUM_WALL_STAGES),
+                            "WALL_P_START": float(WALL_P_START),
+                            "wall_p_final": float(WALL_P_FINAL),
                             "ppo_cfg": ppo_cfg.__dict__,
                             "env_cfg": env_cfg.__dict__,
                             "teacher_mix_start": float(teacher_mix_start),
@@ -1480,10 +1482,8 @@ def main() -> None:
                         save_rng=True,
                     )
 
-                    print(
-                        f"   ✅ Saved BEST phase1: {best_path} "
-                        f"(TEST_FINAL detSR_multiwalls PPO={best_test_sr_final:.3f})"
-                    )
+                    if verbose:
+                        print(f"   ✅ Saved BEST phase1: {best_path} (TEST_FINAL detSR_multiwalls PPO={best_test_sr_final:.3f})")
 
                 logger.log(
                     {
@@ -1506,7 +1506,7 @@ def main() -> None:
                     {
                         "kind": "test_final",
                         "upd": int(upd),
-                        "wall_prob": float(wall_p_final),
+                        "wall_prob": float(WALL_P_FINAL),
                         "episodes": int(eval_eps_test_final),
                         "sr_hybrid_a": float(test_h["sr"]),
                         "sr_hybrid_b": float(test_b_h["sr"]),
@@ -1520,12 +1520,12 @@ def main() -> None:
 
                 
                 # ✅ Promoción: requiere pasar gate y NO romper test (anti-regresión)
-                if good_streak >= int(need_k) and cur_stage < (num_wall_stages - 1):
+                if good_streak >= int(need_k) and cur_stage < (NUM_WALL_STAGES - 1):
                     can_promote = True
                     blocked_by_test = False
 
                     if stage_promote_requires_test:
-                        next_stage = int(min(cur_stage + 1, num_wall_stages - 1))
+                        next_stage = int(min(cur_stage + 1, NUM_WALL_STAGES - 1))
                         req_base = float(stage_test_min[next_stage])
 
                         # ✅ Relax controlado si llevamos evaluaciones seguidas pasando gate pero el TEST aún no llega
@@ -1545,9 +1545,8 @@ def main() -> None:
                             blocked_by_test = False  # aquí no es “no listo”, es “retroceso”
 
                     if can_promote:
-                        if stage_promote_requires_test:
-                            print(f"   PROMOTE_CHECK: next_req_base={req_base:.2f} req_eff={req_eff:.2f} "
-                                f"sr_test_ppo={sr_test_ppo:.3f} hold={promote_hold}")
+                        if verbose:
+                            print(f"   PROMOTE_CHECK: next_req_base={req_base:.2f} req_eff={req_eff:.2f} sr_test_ppo={sr_test_ppo:.3f} hold={promote_hold}")
                         old_stage = cur_stage
                         cur_stage += 1
                         good_streak = 0
@@ -1555,7 +1554,7 @@ def main() -> None:
                         promote_hold = 0  # ✅ reset al promover
 
                         cur_wall_prob = wall_prob_for_stage(
-                            cur_stage, num_wall_stages, wall_p_start, wall_p_final
+                            cur_stage, NUM_WALL_STAGES, WALL_P_START, WALL_P_FINAL
                         )
 
 
@@ -1567,9 +1566,8 @@ def main() -> None:
                         reset_seed = episode_reset_seed_base + episodes + 10_000 * cur_stage
                         obs, info = train_env.reset(seed=int(reset_seed), phase=1)
 
-                        print(
-                            f"🧱 GATE PASS: stage {old_stage} -> {cur_stage} | new wall_prob={cur_wall_prob:.3f}"
-                        )
+                        if verbose:
+                            print(f"🧱 GATE PASS: stage {old_stage} -> {cur_stage} | new wall_prob={cur_wall_prob:.3f}")
 
                         stage_transition_boost_updates = int(stage_boost_len)
 
@@ -1586,13 +1584,11 @@ def main() -> None:
                         if mismatch_stuck >= 3:
                             mismatch_boost_updates = max(int(mismatch_boost_updates), int(mismatch_boost_len))
                             mismatch_stuck = 0
-                            print(f"🚀 MISMATCH BOOST ON: +ent_floor to {mismatch_ent_floor} and lr_max to {mismatch_lr_max:.2e} "
-                                f"for {mismatch_boost_len} updates")
+                            if verbose:
+                                print(f"🚀 MISMATCH BOOST ON: +ent_floor to {mismatch_ent_floor} and lr_max to {mismatch_lr_max:.2e} for {mismatch_boost_len} updates")
 
-                        print(
-                            "🧱 Gate passed, but TEST_FINAL not ready -> holding stage (anti-regression). "
-                            f"(promote_hold={promote_hold})"
-                        )
+                        if verbose:
+                            print(f"🧱 Gate passed, but TEST_FINAL not ready -> holding stage (anti-regression). (promote_hold={promote_hold})")
 
                 # ---- RESTORE RNG ----
                 random.setstate(py_state)
@@ -1610,4 +1606,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    env_cfg, train_env = setup()
+    for _ in main(env_cfg, train_env, verbose=True):
+        pass

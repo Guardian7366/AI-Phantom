@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Optional
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -17,42 +14,7 @@ from ai_phantom.agents.ppo.action_mask import mask_invalid_actions
 from ai_phantom.agents.ppo.logits_utils import sanitize_logits_keep_neginf
 
 
-@dataclass
-class BCConfig:
-    # Repro
-    seed: int = 123
-
-    # Phase
-    phase: int = 1
-
-    # Dataset seeds
-    train_seed_base: int = 42
-
-    # Walls (alineado a Phase1)
-    use_walls: bool = True
-    walls_seed_init: int = 777          # seed inicial (MazeEnv ctor)
-    rebuild_walls_each_episode: bool = True
-    walls_seed_base: int = 777          # base para rebuild_walls
-    wall_prob: float = 0.18
-
-    # Dificultad (fase 1)
-    min_manhattan: int = 6
-
-    # Dataset streaming (controla tiempo)
-    episodes: int = 2500                # resets por epoch
-    steps_per_ep: int = 48              # pasos teacher por episodio (dataset)
-    max_steps_env: int = 256            # IMPORTANT: max_steps del env (horizon real)
-
-    # Train
-    lr: float = 3e-4
-    batch_size: int = 256
-    grad_clip: float = 0.5
-
-    # epochs = cuántas veces regeneramos datos nuevos
-    epochs: int = 2
-
-    # Logging
-    log_every_updates: int = 200         # (antes "steps", pero realmente es updates)
+WALLS_SEED_INIT = 777
 
 
 def _sync_horizon_env(env: MazeEnv, *, expected_max_steps: int, where: str) -> None:
@@ -145,21 +107,19 @@ def _quick_eval_teacher_acc(
     return (correct / total) if total > 0 else 0.0
 
 
-def setup() -> tuple[MazeConfig, MazeEnv, BCConfig]:
-    cfg = BCConfig()
-
+def setup() -> tuple[MazeConfig, MazeEnv]:
     # ✅ Env alineado con train_phase1
     env_cfg = MazeConfig(
         height=12,
         width=12,
 
         # paredes
-        use_walls=bool(cfg.use_walls),
-        wall_prob=float(cfg.wall_prob),
+        use_walls=True,
+        wall_prob=0.18,
 
         # IMPORTANT: horizon real (guard rail lo mantendrá)
-        max_steps=int(cfg.max_steps_env),
-        min_manhattan=int(cfg.min_manhattan),
+        max_steps=256,
+        min_manhattan=6,
 
         # Rewards (no importa tanto para BC, pero alineamos)
         step_penalty=-0.01,
@@ -182,23 +142,41 @@ def setup() -> tuple[MazeConfig, MazeEnv, BCConfig]:
         progress_reward_clip=0.05,
     )
 
-    env = MazeEnv(env_cfg, seed=int(cfg.walls_seed_init))
+    env = MazeEnv(env_cfg, seed=int(WALLS_SEED_INIT))
 
-    return (env_cfg, env, cfg)
+    return (env_cfg, env)
 
 
-def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
-    set_global_seed(cfg.seed)
+def main(env_cfg: MazeConfig, env: MazeEnv, verbose=False) -> iter[tuple[int, int | None, int]]:
+    set_global_seed(123)
+    phase = 1
+    train_seed_base = 42
+    rebuild_walls_each_episode: bool = True
+    walls_seed_base = 777          # base para rebuild_walls
+
+    episodes = 2500                # resets por epoch
+    steps_per_ep = 48              # pasos teacher por episodio (dataset)
+
+    # Train
+    lr = 3e-4
+    batch_size = 256
+    grad_clip = 0.5
+
+    # epochs = cuántas veces regeneramos datos nuevos
+    epochs = 2
+
+    # Logging
+    log_every_updates = 200         # (antes "steps", pero realmente es updates)
 
     # Guard rails básicos del dataset/horizon
-    if int(cfg.steps_per_ep) <= 0:
-        raise ValueError(f"steps_per_ep debe ser > 0, recibido={cfg.steps_per_ep}")
-    if int(cfg.max_steps_env) <= 0:
-        raise ValueError(f"max_steps_env debe ser > 0, recibido={cfg.max_steps_env}")
-    if int(cfg.steps_per_ep) > int(cfg.max_steps_env):
+    if steps_per_ep <= 0:
+        raise ValueError(f"steps_per_ep debe ser > 0, recibido={steps_per_ep}")
+    if env_cfg.max_steps <= 0:
+        raise ValueError(f"env_cfg.max_steps debe ser > 0, recibido={env_cfg.max_steps}")
+    if steps_per_ep > env_cfg.max_steps:
         raise ValueError(
-            f"steps_per_ep ({cfg.steps_per_ep}) no puede ser > max_steps_env ({cfg.max_steps_env}). "
-            f"Sube max_steps_env o baja steps_per_ep."
+            f"steps_per_ep ({steps_per_ep}) no puede ser > env_cfg.max_steps ({env_cfg.max_steps}). "
+            f"Sube env_cfg.max_steps o baja steps_per_ep."
         )
 
     dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
@@ -207,26 +185,26 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
     os.makedirs("results/checkpoints", exist_ok=True)
 
     # En BC el ctor seed fija el primer layout; luego rebuild_walls da diversidad si está habilitado
-    _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="init")
+    _sync_horizon_env(env, expected_max_steps=env_cfg.max_steps, where="init")
 
     # Modelo
-    obs0, _ = env.reset(seed=0, phase=int(cfg.phase))
-    _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="after_first_reset")
+    obs0, _ = env.reset(seed=0, phase=phase)
+    _sync_horizon_env(env, expected_max_steps=env_cfg.max_steps, where="after_first_reset")
 
     obs_shape = tuple(obs0.shape)
     model = CnnActorCritic(obs_shape=obs_shape, num_actions=4).to(device)
-    optim = torch.optim.Adam(model.parameters(), lr=float(cfg.lr), eps=1e-5)
+    optim = torch.optim.Adam(model.parameters(), lr=lr, eps=1e-5)
 
     if verbose:
         print(
             "BC setup:"
-            f" use_walls={cfg.use_walls}"
-            f" wall_prob={cfg.wall_prob}"
-            f" walls_seed_init={cfg.walls_seed_init}"
-            f" episodes/epoch={cfg.episodes}"
-            f" steps/ep={cfg.steps_per_ep}"
-            f" epochs={cfg.epochs}"
-            f" horizon(max_steps)={cfg.max_steps_env}"
+            f" use_walls={env_cfg.use_walls}"
+            f" wall_prob={env_cfg.wall_prob}"
+            f" walls_seed_init={WALLS_SEED_INIT}"
+            f" episodes/epoch={episodes}"
+            f" steps/ep={steps_per_ep}"
+            f" epochs={epochs}"
+            f" horizon(max_steps)={env_cfg.max_steps}"
         )
 
     model.train()
@@ -240,23 +218,23 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
     successes = 0
     action = None
 
-    for epc in range(int(cfg.epochs)):
-        base = int(cfg.train_seed_base + epc * 1_000_000)  # diversidad por epoch
+    for epc in range(epochs):
+        base = int(train_seed_base + epc * 1_000_000)  # diversidad por epoch
 
         running_loss = 0.0
         running_n = 0
 
-        for ep in range(int(cfg.episodes)):
-            if cfg.rebuild_walls_each_episode and hasattr(env, "rebuild_walls"):
-                ws = int(cfg.walls_seed_base + base + ep)
-                env.rebuild_walls(seed=ws, wall_prob=float(cfg.wall_prob))
-                _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="train:after_rebuild_walls")
+        for ep in range(episodes):
+            if rebuild_walls_each_episode and hasattr(env, "rebuild_walls"):
+                ws = int(walls_seed_base + base + ep)
+                env.rebuild_walls(seed=ws, wall_prob=float(env_cfg.wall_prob))
+                _sync_horizon_env(env, expected_max_steps=env_cfg.max_steps, where="train:after_rebuild_walls")
 
-            obs, _ = env.reset(seed=int(base + ep), phase=int(cfg.phase))
-            _sync_horizon_env(env, expected_max_steps=int(cfg.max_steps_env), where="train:after_reset")
+            obs, _ = env.reset(seed=int(base + ep), phase=phase)
+            _sync_horizon_env(env, expected_max_steps=env_cfg.max_steps, where="train:after_reset")
 
             # Recolecta pasos teacher
-            for _ in range(int(cfg.steps_per_ep)):
+            for _ in range(steps_per_ep):
                 action = _teacher_action(env)
 
                 obs_batch.append(obs.copy())
@@ -267,7 +245,7 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
                 yield (ep, action, successes)
 
                 # Train step cuando llenamos batch
-                if len(act_batch) >= int(cfg.batch_size):
+                if len(act_batch) >= batch_size:
                     X = torch.from_numpy(np.stack(obs_batch, axis=0)).to(device).float()
                     y = torch.tensor(act_batch, device=device, dtype=torch.long)
 
@@ -285,7 +263,7 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
 
                     optim.zero_grad(set_to_none=True)
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.grad_clip))
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                     optim.step()
 
                     update_counter += 1
@@ -295,10 +273,10 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
                     obs_batch.clear()
                     act_batch.clear()
 
-                    if (update_counter % max(1, int(cfg.log_every_updates))) == 0:
+                    if (update_counter % max(1, log_every_updates)) == 0:
                         avg_loss = running_loss / float(max(1, running_n))
                         if verbose:
-                            print(f"[BC epc {epc+1}/{cfg.epochs}] updates={update_counter:5d} avg_loss={avg_loss:.4f} steps_seen={step_counter}")
+                            print(f"[BC epc {epc+1}/{epochs}] updates={update_counter:5d} avg_loss={avg_loss:.4f} steps_seen={step_counter}")
 
                 if done:
                     if info.get("reached", False):
@@ -322,7 +300,7 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
 
             optim.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.grad_clip))
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optim.step()
 
             update_counter += 1
@@ -339,16 +317,16 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
                 env=env,
                 model=model,
                 device=device,
-                phase=int(cfg.phase),
+                phase=phase,
                 seed_base=99_000 + 10_000 * epc,
                 episodes=200,
                 steps_per_ep=12,
-                rebuild_walls_each_episode=bool(cfg.rebuild_walls_each_episode),
-                walls_seed_base=int(cfg.walls_seed_base),
-                wall_prob=float(cfg.wall_prob),
-                expected_max_steps=int(cfg.max_steps_env),
+                rebuild_walls_each_episode=rebuild_walls_each_episode,
+                walls_seed_base=walls_seed_base,
+                wall_prob=env_cfg.wall_prob,
+                expected_max_steps=env_cfg.max_steps,
             )
-            print(f"[BC epoch {epc+1}/{cfg.epochs}] done. avg_loss={avg_loss:.4f} teacher_acc={acc:.3f}")
+            print(f"[BC epoch {epc+1}/{epochs}] done. avg_loss={avg_loss:.4f} teacher_acc={acc:.3f}")
 
     out_path = "results/checkpoints/bc_phase1.pt"
     save_checkpoint(
@@ -356,11 +334,9 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
         model=model,
         optimizer=optim,
         extra={
-            "phase": int(cfg.phase),
+            "phase": phase,
             "obs_shape": obs_shape,
-            "bc_cfg": cfg.__dict__,
             "env_cfg": env_cfg.__dict__,
-            "walls_seed_init": int(cfg.walls_seed_init),
         },
         save_rng=True,
     )
@@ -368,6 +344,6 @@ def main(env_cfg, env, cfg, verbose=False) -> iter[tuple[int, int | None, int]]:
 
 
 if __name__ == "__main__":
-    env_cfg, env, cfg = setup()
-    for _ in main(env_cfg, env, cfg, verbose=True):
+    env_cfg, env = setup()
+    for _ in main(env_cfg, env, verbose=True):
         pass
