@@ -1,11 +1,17 @@
 import pygame
 import math
 import random
+import os
+import torch
 
+from ai_phantom.agents.ppo.policy import Policy
+from ai_phantom.core.checkpointing import load_checkpoint
+from ai_phantom.agents.ppo import CnnActorCritic, PPOConfig, PPOTrainer
+from ai_phantom.core.device import select_device
 from ai_phantom.envs.maze.maze_env import MazeConfig, MazeEnv
 from ai_phantom.planners.bfs import bfs_plan, path_to_actions
-from utils.start_menu import Button, Icon_Button, SettingsPanel
-from utils.conf import WINDOW_WIDTH, FPS, Config
+from utils.start_menu import Icon_Button, SettingsPanel
+from utils.conf import WINDOW_WIDTH, FPS, Config, PHASE_0, PHASE_BC, PHASE_1, FINAL_1
 
 
 class MazeGameScreen:
@@ -38,8 +44,11 @@ class MazeGameScreen:
             height=12,
             width=12,
             use_walls=True,
-            max_steps=10,
+            max_steps=50,
             min_manhattan=6,
+            include_dist_channel=True,
+            terminate_on_loop=False,
+            loop_terminate_hits=999,
         )
         self.maze_env = MazeEnv(self.maze_cfg, seed=0)
         self.maze_grid = None
@@ -72,6 +81,38 @@ class MazeGameScreen:
         self.cross_img = pygame.image.load("assets/sprites/misc/RedCross.png").convert_alpha()
 
         self.mouse_in_maze_pos = None
+
+        dev_cfg = select_device(device="auto", allow_tf32=True, cudnn_benchmark=True)
+        self.device = dev_cfg.device
+        ppo_cfg = PPOConfig()
+        obs, _ = self.maze_env.reset(seed=0, phase=1)
+        obs_shape = tuple(obs.shape)
+        model = CnnActorCritic(obs_shape=obs_shape, num_actions=4)
+        trainer = PPOTrainer(model=model, cfg=ppo_cfg, device=self.device)
+
+        self.policy = Policy(
+            model=trainer.model,
+            enable_action_mask=True,
+            nan_repl=float(ppo_cfg.nan_logits_replacement),
+            fallback_action=0,
+        )
+
+        checkpoint_kwargs = {
+            "model": trainer.model,
+            "optimizer": trainer.optim,
+            "map_location": self.device,
+            "restore_rng": False,
+        }
+
+        if os.path.exists(FINAL_1):
+            load_checkpoint(FINAL_1, **checkpoint_kwargs)
+        elif os.path.exists(PHASE_1):
+            load_checkpoint(PHASE_1, **checkpoint_kwargs)
+        elif os.path.exists(PHASE_BC):
+            load_checkpoint(PHASE_BC, **checkpoint_kwargs)
+        elif os.path.exists(PHASE_0):
+            load_checkpoint(PHASE_0, **checkpoint_kwargs)
+
 
     # ----------------------
     # CREATION & LAYOUT
@@ -210,30 +251,28 @@ class MazeGameScreen:
         return None
 
     def move_ghost(self):
-        if self.maze_actions is None:
+        if pygame.time.get_ticks() - self.current_tick > 250:
             self.current_tick = pygame.time.get_ticks()
-            path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
-            if path is not None:
-                self.maze_actions = path_to_actions(path)
-            else:
+
+            obs = self.maze_env._make_obs()
+            obs_t = torch.from_numpy(obs).unsqueeze(0).to(self.device).float()
+
+            with torch.no_grad():
+                out = self.policy.act(obs_t, deterministic=True)
+
+            action = int(out.action.item())
+            self.current_action = action
+
+            obs, _, done, info = self.maze_env.step(action)
+            self.maze_grid = self.maze_env.render().splitlines()
+
+            if done:
+                self.current_action = "idle"  # Reset action to idle when episode ends
                 self.maze_grid = None  # Trigger new maze generation
-        else:
-            # Step through actions at the current speed when playing
-            if pygame.time.get_ticks() - self.current_tick > 500:
-                self.current_tick = pygame.time.get_ticks()
-                # Step the maze_env with the next action
-                self.current_action = self.maze_actions.pop(0)
-                # Update the maze environment and grid 
-                obs, reward, done, info = self.maze_env.step(self.current_action)
-                self.maze_grid = self.maze_env.render().splitlines()
-                if done:
-                    self.current_action = "idle"  # Reset action to idle when episode ends
-                    self.maze_actions = None  # Reset for next episode
-                    self.maze_grid = None  # Trigger new maze generation
-                    if info["reached"]:
-                        self.caught_sound.play() #Play sound effect when ghost catches the player
-                    else:
-                        self.maze_cfg.max_steps += 1
+                if info["reached"]:
+                    self.caught_sound.play() #Play sound effect when ghost catches the player
+                else:
+                    self.maze_cfg.max_steps += 5  # Increase max steps limit if ghost fails to catch player
 
 
 
@@ -282,12 +321,11 @@ class MazeGameScreen:
                             if event.type == pygame.MOUSEBUTTONDOWN:
                                 self.maze_env.goal = (cell_r, cell_c)
                                 self.maze_grid = self.maze_env.render().splitlines()
+                                self.mouse_in_maze_pos = None  # Clear stored position after setting goal
                         else:
-                            # Clear stored position if hovering over invalid cell
-                            self.mouse_in_maze_pos = None
+                            self.mouse_in_maze_pos = None  # Clear stored position if hovering over invalid cell
                     else:
-                        # Clear stored position when mouse leaves maze area
-                        self.mouse_in_maze_pos = None
+                        self.mouse_in_maze_pos = None # Clear stored position when mouse leaves maze area
 
                 if self.show_settings:
                     if event.type == pygame.MOUSEBUTTONDOWN:
