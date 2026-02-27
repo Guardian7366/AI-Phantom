@@ -112,6 +112,8 @@ class MazeGameScreen:
             load_checkpoint(PHASE_BC, **checkpoint_kwargs)
         elif os.path.exists(PHASE_0):
             load_checkpoint(PHASE_0, **checkpoint_kwargs)
+        else:
+            raise RuntimeError("No training found. Run training first to play the game.")
 
 
     # ----------------------

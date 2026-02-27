@@ -2,7 +2,7 @@ import pygame
 import math
 import os
 from utils.start_menu import Button
-from utils.conf import FPS, Config
+from utils.conf import FPS, Config, PHASE_0, PHASE_BC, PHASE_1, FINAL_1
 
 
 class SelectionMenuScreen:
@@ -17,6 +17,14 @@ class SelectionMenuScreen:
         self.font_statsTitle = config.font_statsTitle
         self.font_button = config.font_button
         self.font_text = config.font_text
+
+        # Check if training data exists for any phase
+        self.training_exists = (
+            os.path.exists(PHASE_0) or
+            os.path.exists(PHASE_BC) or
+            os.path.exists(PHASE_1) or
+            os.path.exists(FINAL_1)
+        )
 
         self.running = True
         self.show_stats = False
@@ -48,6 +56,11 @@ class SelectionMenuScreen:
         ]
 
         self.card_images_original = []
+
+        if not self.training_exists:
+            self.lock_img = pygame.image.load(os.path.join(image_folder, "lock.png")).convert_alpha()
+        else:
+            self.lock_img = None
 
         for name in image_names:
             path = os.path.join(image_folder, name)
@@ -200,6 +213,14 @@ class SelectionMenuScreen:
 
             self.screen.blit(title_surface, title_rect)
 
+            if self.lock_img and card["title"] == "Maze Game":
+                lock_scaled = pygame.transform.scale(
+                    self.lock_img,
+                    (scaled_rect.width // 2, scaled_rect.height // 2)
+                )
+                lock_rect = lock_scaled.get_rect(center=scaled_rect.center)
+                self.screen.blit(lock_scaled, lock_rect)
+
     # --------------------------------------------------------
     # STATS PANEL
     # --------------------------------------------------------
@@ -265,7 +286,7 @@ class SelectionMenuScreen:
                                 title = card["title"]
                                 if title == "Maze":
                                     return "maze_train"
-                                if title == "Maze Game":
+                                if title == "Maze Game" and self.training_exists:
                                     return "maze_game"
                                 print(f"Selected: {card['title']}")
 
