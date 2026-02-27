@@ -87,7 +87,7 @@ class MazeTrainingScreen:
         self.ghost_img["idle"] = pygame.image.load("assets/sprites/phantom/PhantomIdle.png").convert_alpha()
         self.floor_img = pygame.image.load("assets/sprites/misc/FloorMaze.png").convert()
         self.wall_img = pygame.image.load("assets/sprites/misc/Wall.png").convert()
-        self.goal_img = pygame.image.load("assets/sprites/misc/GoalPanel.png").convert()
+        self.goal_img = pygame.image.load("assets/sprites/misc/Chest.png").convert()
 
         self.success_num = 0
         self.episode_num = 0
