@@ -1,7 +1,12 @@
 import pygame
 import math
 import random
+import os
 
+import torch
+
+from ai_phantom.agents.ppo import CnnActorCritic, Policy
+from ai_phantom.core import load_checkpoint, select_device
 from ai_phantom.envs.maze.maze_env import MazeConfig, MazeEnv
 from ai_phantom.planners.bfs import bfs_plan, path_to_actions
 from utils.start_menu import Button, Icon_Button, SettingsPanel
@@ -38,8 +43,13 @@ class MazeGameScreen:
             height=12,
             width=12,
             use_walls=True,
-            max_steps=10,
+            max_steps=256,
             min_manhattan=6,
+            include_dist_channel=True,
+            include_goal=True,
+            include_visited=True,
+            terminate_on_loop=False,
+            loop_terminate_hits=999,
         )
         self.maze_env = MazeEnv(self.maze_cfg, seed=0)
         self.maze_grid = None
@@ -71,7 +81,44 @@ class MazeGameScreen:
         self.player_img = pygame.image.load("assets/sprites/misc/Player.png").convert_alpha()
         self.cross_img = pygame.image.load("assets/sprites/misc/RedCross.png").convert_alpha()
 
+        if os.path.exists("results/checkpoints/best_phase1.pt"):
+            self.ckptpath = "results/checkpoints/best_phase1.pt"
+        elif os.path.exists("results/checkpoints/best_phase0.pt"):
+            self.ckptpath = "results/checkpoints/best_phase0.pt"
+        else:
+            print("No se puede mijo")
+            return "start"
+        
+
+        dev_cfg = select_device(device="auto")
+        self.device = dev_cfg.device
+
+
+        obs0, _ = self.maze_env.reset(seed=0, phase=1)
+        obs_shape = tuple(obs0.shape)
+
+        model = CnnActorCritic(obs_shape=obs_shape, num_actions=4)
+        extra = load_checkpoint(
+            path=self.ckptpath,
+            model=model,
+            optimizer=None,
+            map_location=self.device,
+            restore_rng=False
+        )
+        model.eval() #🔥 IMPORTANTE
+
+        self.policy = Policy(
+            model=model,
+            enable_action_mask=True,
+            nan_repl=0.0,
+            fallback_action=0
+        )
+
+        self.model_sr = float(extra.get("best_test_sr_det_multiwalls_final", -1.0))
+        print(self.model_sr)
+
         self.mouse_in_maze_pos = None
+        self.counter = 0
 
     # ----------------------
     # CREATION & LAYOUT
@@ -209,32 +256,32 @@ class MazeGameScreen:
 
         return None
 
-    def move_ghost(self):
-        if self.maze_actions is None:
+    def update_ghost(self):
+        if pygame.time.get_ticks() - self.current_tick > 100:
             self.current_tick = pygame.time.get_ticks()
-            path = bfs_plan(self.maze_env.walls, self.maze_env.agent, self.maze_env.goal)
-            if path is not None:
-                self.maze_actions = path_to_actions(path)
-            else:
-                self.maze_grid = None  # Trigger new maze generation
-        else:
-            # Step through actions at the current speed when playing
-            if pygame.time.get_ticks() - self.current_tick > 500:
-                self.current_tick = pygame.time.get_ticks()
-                # Step the maze_env with the next action
-                self.current_action = self.maze_actions.pop(0)
-                # Update the maze environment and grid 
-                obs, reward, done, info = self.maze_env.step(self.current_action)
-                self.maze_grid = self.maze_env.render().splitlines()
-                if done:
-                    self.current_action = "idle"  # Reset action to idle when episode ends
-                    self.maze_actions = None  # Reset for next episode
-                    self.maze_grid = None  # Trigger new maze generation
-                    if info["reached"]:
-                        self.caught_sound.play() #Play sound effect when ghost catches the player
-                    else:
-                        self.maze_cfg.max_steps += 1
 
+            obs = self.maze_env._make_obs()
+            obs_t = torch.from_numpy(obs).unsqueeze(0).to(self.device).float()
+
+            with torch.no_grad():
+                out = self.policy.act(obs_t, deterministic=True)
+
+            action = int(out.action.item())
+            self.current_action = action
+
+            obs, reward, done, info = self.maze_env.step(action)
+            self.maze_grid = self.maze_env.render().splitlines()
+
+            if done:
+                self.current_action = "idle"
+                self.maze_grid = None
+                if info["reached"]:
+                    self.caught_sound.play()
+                    print("Llego")
+                else:
+                    self.maze_cfg.max_steps += 1
+                    self.counter += 1
+                    print(self.counter,"No llego")
 
 
     # ----------------------------------
@@ -248,14 +295,14 @@ class MazeGameScreen:
 
             if self.maze_grid is None:
                 seed = random.randint(0, 9999)
-                wall_prob = random.uniform(0.1, 0.35)  # Random wall density for variability
+                wall_prob = random.uniform(0.1, 0.15)  # Random wall density for variability
                 self.maze_env.rebuild_walls(seed=seed, wall_prob=wall_prob)  # Ensure new maze layout
                 obs, info = self.maze_env.reset(seed=seed, phase=1)
                 self.maze_env.goal = None  # Clear goal to allow player placement
                 self.maze_grid = self.maze_env.render().splitlines()
 
             if self.maze_env.goal is not None:
-                self.move_ghost()  # Start the ghost movement logic
+                self.update_ghost()  # Start the ghost movement logic
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
