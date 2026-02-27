@@ -322,7 +322,7 @@ class MazeGameScreen:
         self.done_tick = pygame.time.get_ticks()
 
         if reached:
-            self.last_episode_result = "CAUGHT ✅"
+            self.last_episode_result = "CAUGHT"
             if self.caught_sound:
                 self.caught_sound.play()
         else:
@@ -357,8 +357,8 @@ class MazeGameScreen:
 
         self.title_pos = (width // 2, 48)
 
-        self.banner_top = 86
-        self.banner_h = 52
+        self.banner_top = 105
+        self.banner_h = 40
         self.banner_rect = pygame.Rect(0, self.banner_top, width, self.banner_h)
 
         area_top = self.banner_rect.bottom + 10
@@ -381,8 +381,8 @@ class MazeGameScreen:
         self.player_title_pos = (width * 0.75, 30)
         self.player_score_pos = (width * 0.75, 65)
 
-        self.btn_back.rect.topleft = (20, 30)
-        self.btn_back.rect.size = (70, 70)
+        self.btn_back.rect.topleft = (20, 20)
+        self.btn_back.rect.size = (75, 75)
         self.btn_settings.rect.topright = (width - 20, 20)
         self.btn_settings.rect.size = (75, 75)
 
@@ -539,11 +539,11 @@ class MazeGameScreen:
         pygame.draw.line(self.screen, (50, 50, 60), (0, self.banner_rect.bottom), (self.banner_rect.width, self.banner_rect.bottom), 2)
 
         if self.state == "placing":
-            msg = f"Click para colocar PERSONA (alcanzable) | Distancia <= {self.dist_cap}"
+            msg = f"CLICK TO PLACE PERSON (Reachable) | Distance <= {self.dist_cap}"
         elif self.state == "running":
-            msg = "Fantasma buscando... (CONTROL: PPO determinista | NO BFS)"
+            msg = "Ghost is Searching... (CONTROL: PPO deterministic | NO BFS)"
         else:
-            msg = f"{self.last_episode_result}  |  (click en el laberinto para nuevo intento)"
+            msg = f"{self.last_episode_result}  |  (Click the maze to play again)"
 
         max_w = self.banner_rect.width - 52
         lines = self._wrap_words(msg, self.font_text, max_w)[:2]
@@ -587,7 +587,7 @@ class MazeGameScreen:
         if self.cur_stage >= 0:
             put_line(f"STAGE: {self.cur_stage}")
         put_line(f"WALL_PROB: {self.cur_wall_prob:.3f}")
-        put_line(f"MIN_MANHATTAN: {self.cur_min_manhattan}")
+        #put_line(f"MIN_MANHATTAN: {self.cur_min_manhattan}")
         put_line(f"MAX_STEPS: {self.max_steps}")
         put_line(f"DIST_CAP: {self.dist_cap}")
 
@@ -596,9 +596,9 @@ class MazeGameScreen:
         y += 10
 
         put_line(f"STATE: {self.state.upper()}")
-        put_line(f"PPO_STEPS: {self._ppo_steps}")
+        #put_line(f"PPO_STEPS: {self._ppo_steps}")
         put_line(f"BFS(placing): {self._bfs_calls_placing}")
-        put_line(f"BFS(running): {self._bfs_calls_running} (debe ser 0)")
+        put_line(f"BFS(running): {self._bfs_calls_running}")
 
         if self.state == "placing" and self.mouse_in_maze_pos is not None:
             y += 6
@@ -672,11 +672,11 @@ class MazeGameScreen:
 
         r, c = pos
         if r < 0 or r >= int(self.maze_cfg.height) or c < 0 or c >= int(self.maze_cfg.width):
-            ok, reason = False, "fuera del grid"
+            ok, reason = False, "OUT OF GRID"
         elif bool(self.maze_env.walls[r, c]):
-            ok, reason = False, "es pared"
+            ok, reason = False, "WALL"
         elif (r, c) == tuple(self.maze_env.agent):
-            ok, reason = False, "es el fantasma"
+            ok, reason = False, "GHOST"
         else:
             self._bfs_calls_placing += 1
             dm = bfs_distance_map(self.maze_env.walls, (r, c))
@@ -684,11 +684,11 @@ class MazeGameScreen:
             d = int(dm[ar, ac]) if dm is not None else -1
 
             if d < 0:
-                ok, reason = False, "inalcanzable"
+                ok, reason = False, "UNREACHABLE"
             elif d > int(self.dist_cap):
-                ok, reason = False, f"muy lejos (dist={d})"
+                ok, reason = False, f"TOO FAR (dist={d})"
             else:
-                ok, reason = True, f"ok (dist={d})"
+                ok, reason = True, f"OK (dist={d})"
 
         self._hover_cache_pos = pos
         self._hover_cache_ok = ok
