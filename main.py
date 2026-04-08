@@ -6,6 +6,9 @@ from utils.maze_train import MazeTrainingScreen
 from utils.maze_game import MazeGameScreen
 from utils.conf import Config
 
+""" JuanS si participó pero al haber un error de configuración con el correo no sale como contribuidor, sin embargo
+cuenta con testigos de su participación activa en el proyecto"""
+
 def main():
 
     pygame.init()
